@@ -174,7 +174,7 @@ const getExpenseById = async (req, res, next) => {
 // @access  Private (creator or group admin)
 const updateExpense = async (req, res, next) => {
   try {
-    const expense = await Expense.findById(req.params.id).populate('group');
+    const expense = await Expense.findById(req.params.id);
     if (!expense) return errorResponse(res, 'Expense not found', 404);
 
     // Authorization
@@ -188,6 +188,7 @@ const updateExpense = async (req, res, next) => {
 
     const { description, amount, currency, category, paidBy, splitType, splits: splitsData, notes, date } = req.body;
 
+    // Update basic fields
     if (description) expense.description = description;
     if (currency) expense.currency = currency;
     if (category) expense.category = category;
@@ -195,23 +196,43 @@ const updateExpense = async (req, res, next) => {
     if (notes !== undefined) expense.notes = notes;
     if (date) expense.date = new Date(date);
 
-    // Recalculate splits if amount or splitType changes
-    if (amount || splitType || splitsData) {
-      const newAmount = amount ? parseFloat(amount) : expense.amount;
-      const newSplitType = splitType || expense.splitType;
-      let parsedSplits = splitsData || expense.splits;
-      if (typeof parsedSplits === 'string') {
-        try { parsedSplits = JSON.parse(parsedSplits); } catch { parsedSplits = []; }
+    // Determine new amount and split type
+    const newAmount = amount ? parseFloat(amount) : expense.amount;
+    const newSplitType = splitType || expense.splitType;
+
+    // Parse splits data from request
+    let parsedSplits = null;
+    if (splitsData) {
+      if (typeof splitsData === 'string') {
+        try { parsedSplits = JSON.parse(splitsData); } catch { parsedSplits = null; }
+      } else if (Array.isArray(splitsData)) {
+        parsedSplits = splitsData;
+      }
+    }
+
+    // Recalculate splits if we have new split data, amount changed, or splitType changed
+    if (parsedSplits || amount || splitType) {
+      // Use new splits data if provided, otherwise convert existing splits to the format buildSplits expects
+      let splitInput = parsedSplits;
+      if (!splitInput) {
+        // Convert existing expense.splits to buildSplits format
+        splitInput = expense.splits.map(s => ({
+          userId: (s.user?._id || s.user)?.toString(),
+          amount: s.amount || 0,
+          percentage: s.percentage || 0,
+          shares: s.shares || 1,
+        }));
       }
 
       try {
-        expense.splits = buildSplits(newSplitType, newAmount, parsedSplits);
+        expense.splits = buildSplits(newSplitType, newAmount, splitInput);
       } catch (err) {
         return errorResponse(res, err.message, 400);
       }
-      expense.amount = newAmount;
-      expense.splitType = newSplitType;
     }
+
+    expense.amount = newAmount;
+    expense.splitType = newSplitType;
 
     if (req.file) {
       expense.receipt = req.file.cloudinaryUrl;
@@ -221,12 +242,13 @@ const updateExpense = async (req, res, next) => {
     await expense.populate([
       { path: 'paidBy', select: 'name username profileImage' },
       { path: 'splits.user', select: 'name username profileImage' },
+      { path: 'group', select: 'name' },
     ]);
 
     // Notify participants
     for (const split of expense.splits) {
-      const participantId = split.user._id.toString();
-      if (participantId !== req.user._id.toString()) {
+      const participantId = (split.user?._id || split.user)?.toString();
+      if (participantId && participantId !== req.user._id.toString()) {
         await createNotification({
           userId: participantId,
           type: 'expense_edited',

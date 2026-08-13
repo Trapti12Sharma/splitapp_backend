@@ -8,6 +8,9 @@ const errorHandler = require('./middleware/errorMiddleware');
 
 const app = express();
 
+// Trust proxy (required for Render, Heroku, etc. behind reverse proxy)
+app.set('trust proxy', 1);
+
 // Security headers
 app.use(
   helmet({
@@ -40,7 +43,7 @@ app.use(
 // Rate limiting - general
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: process.env.NODE_ENV === 'production' ? 100 : 500,
+  max: 300, // 300 requests per 15 minutes per IP
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later' },
@@ -49,7 +52,7 @@ const generalLimiter = rateLimit({
 // Rate limiting - auth endpoints (stricter)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: process.env.NODE_ENV === 'production' ? 10 : 100,
+  max: 20, // 20 auth attempts per 15 minutes
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many authentication attempts, please try again later' },

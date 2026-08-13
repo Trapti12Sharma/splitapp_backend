@@ -29,7 +29,7 @@ const createGroup = async (req, res, next) => {
 
     let groupImage = null;
     if (req.file) {
-      groupImage = `/uploads/groups/${req.file.filename}`;
+      groupImage = req.file.cloudinaryUrl;
     }
 
     // Build members array: creator is admin
@@ -109,7 +109,7 @@ const updateGroup = async (req, res, next) => {
     const { name, description } = req.body;
     if (name) group.name = name;
     if (description !== undefined) group.description = description;
-    if (req.file) group.groupImage = `/uploads/groups/${req.file.filename}`;
+    if (req.file) group.groupImage = req.file.cloudinaryUrl;
 
     await group.save();
     await group.populate('members.user', 'name username profileImage');

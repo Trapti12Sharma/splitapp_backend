@@ -63,7 +63,7 @@ const updateProfile = async (req, res, next) => {
       updates.email = email.toLowerCase().trim();
     }
     if (req.file) {
-      updates.profileImage = `/uploads/profiles/${req.file.filename}`;
+      updates.profileImage = req.file.cloudinaryUrl;
     }
 
     const user = await User.findByIdAndUpdate(req.user._id, updates, {

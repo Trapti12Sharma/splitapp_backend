@@ -25,7 +25,7 @@ const register = async (req, res, next) => {
     // Handle profile image upload
     let profileImage = null;
     if (req.file) {
-      profileImage = `/uploads/profiles/${req.file.filename}`;
+      profileImage = req.file.cloudinaryUrl;
     }
 
     const user = await User.create({

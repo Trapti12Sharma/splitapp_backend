@@ -96,7 +96,7 @@ const createExpense = async (req, res, next) => {
 
     let receipt = null;
     if (req.file) {
-      receipt = `/uploads/receipts/${req.file.filename}`;
+      receipt = req.file.cloudinaryUrl;
     }
 
     const expense = await Expense.create({
@@ -214,7 +214,7 @@ const updateExpense = async (req, res, next) => {
     }
 
     if (req.file) {
-      expense.receipt = `/uploads/receipts/${req.file.filename}`;
+      expense.receipt = req.file.cloudinaryUrl;
     }
 
     await expense.save();

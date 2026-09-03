@@ -183,4 +183,85 @@ const getGroupSpending = async (req, res, next) => {
   }
 };
 
-module.exports = { getSummary, getMonthlyExpenses, getCategoryBreakdown, getGroupSpending };
+// @desc    Get detailed stats for a specific group
+// @route   GET /api/groups/:id/stats
+// @access  Private (members only)
+const getGroupStats = async (req, res, next) => {
+  try {
+    const mongoose = require('mongoose');
+    const groupId = new mongoose.Types.ObjectId(req.params.id);
+    const Group = require('../models/Group');
+
+    const group = await Group.findById(groupId).populate('members.user', 'name username profileImage');
+    if (!group) return require('../utils/apiResponse').errorResponse(res, 'Group not found', 404);
+    if (!group.isMember(req.user._id)) return require('../utils/apiResponse').errorResponse(res, 'Access denied', 403);
+
+    // Total group expenses
+    const [totals] = await Expense.aggregate([
+      { $match: { group: groupId } },
+      { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]);
+
+    // Category breakdown for this group
+    const categoryBreakdown = await Expense.aggregate([
+      { $match: { group: groupId } },
+      { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+      { $sort: { total: -1 } },
+    ]);
+
+    // Per-person stats — how much each person paid and owes in this group
+    const expenses = await Expense.find({ group: groupId }).lean();
+    const memberIds = group.members.filter(m => m.user).map(m => m.user._id.toString());
+
+    const personStats = {};
+    memberIds.forEach(id => {
+      personStats[id] = { totalPaid: 0, totalOwed: 0, expenseCount: 0 };
+    });
+
+    for (const exp of expenses) {
+      const payerId = exp.paidBy.toString();
+      if (personStats[payerId] !== undefined) {
+        personStats[payerId].totalPaid += exp.amount;
+        personStats[payerId].expenseCount += 1;
+      }
+      for (const split of exp.splits) {
+        const splitUserId = split.user.toString();
+        if (personStats[splitUserId] !== undefined) {
+          personStats[splitUserId].totalOwed += split.amount;
+        }
+      }
+    }
+
+    // Build enriched per-member stats
+    const memberStats = group.members
+      .filter(m => m.user)
+      .map(m => {
+        const uid = m.user._id.toString();
+        const stats = personStats[uid] || { totalPaid: 0, totalOwed: 0, expenseCount: 0 };
+        return {
+          user: m.user,
+          role: m.role,
+          totalPaid: Math.round(stats.totalPaid * 100) / 100,
+          totalOwed: Math.round(stats.totalOwed * 100) / 100,
+          netBalance: Math.round((stats.totalPaid - stats.totalOwed) * 100) / 100,
+          expenseCount: stats.expenseCount,
+        };
+      });
+
+    return successResponse(res, 'Group stats fetched', {
+      totalAmount: Math.round((totals?.totalAmount || 0) * 100) / 100,
+      totalExpenses: totals?.count || 0,
+      memberCount: group.members.length,
+      categoryBreakdown: categoryBreakdown.map(c => ({
+        category: c._id || 'Other',
+        total: Math.round(c.total * 100) / 100,
+        count: c.count,
+      })),
+      memberStats,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { getSummary, getMonthlyExpenses, getCategoryBreakdown, getGroupSpending, getGroupStats };

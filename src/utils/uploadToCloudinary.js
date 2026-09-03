@@ -3,18 +3,15 @@ const streamifier = require('streamifier');
 
 /**
  * Upload a file buffer to Cloudinary
- * @param {Buffer} buffer - File buffer from multer memoryStorage
- * @param {string} folder - Cloudinary folder name (e.g. 'splitapp/profiles')
- * @returns {Promise<string>} - Cloudinary secure URL
  */
 const uploadToCloudinary = (buffer, folder = 'splitapp') => {
   return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
+    const stream = cloudinary.uploader.upload_stream(
       {
         folder,
         resource_type: 'image',
         transformation: [
-          { width: 500, height: 500, crop: 'limit', quality: 'auto', format: 'webp' },
+          { width: 800, height: 800, crop: 'limit', quality: 'auto', fetch_format: 'auto' },
         ],
       },
       (error, result) => {
@@ -22,7 +19,7 @@ const uploadToCloudinary = (buffer, folder = 'splitapp') => {
         resolve(result.secure_url);
       }
     );
-    streamifier.createReadStream(buffer).pipe(uploadStream);
+    streamifier.createReadStream(buffer).pipe(stream);
   });
 };
 

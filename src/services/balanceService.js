@@ -56,12 +56,14 @@ const calculateUserBalances = async (userId) => {
     const toStr = settlement.to.toString();
 
     if (fromStr === userIdStr) {
-      // I paid someone (fromStr=me) to reduce what I owe them
-      // So their balance toward me decreases (they owe me less, or I owe them less)
+      // I (from) paid someone (to) — this reduces how much I owe them
+      // In the balance map: positive = they owe me, negative = I owe them
+      // Me paying them means my debt to them decreases → their entry in my map goes UP (less negative)
       const key = ensureKey(toStr);
-      balanceMap[key] -= settlement.amount; // reduces their debt to me (or increases my debt to them)
+      balanceMap[key] += settlement.amount;
     } else if (toStr === userIdStr) {
-      // Someone paid me — reduces what they owe me
+      // Someone (from) paid me (to) — this reduces how much they owe me
+      // Their entry in my map goes DOWN (less positive)
       const key = ensureKey(fromStr);
       balanceMap[key] -= settlement.amount;
     }

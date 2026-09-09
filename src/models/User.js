@@ -73,4 +73,10 @@ userSchema.methods.toJSON = function () {
   return obj;
 };
 
+// Index for user search. `username` and `email` are already indexed by their
+// `unique: true` field option — declaring them again here created duplicate
+// indexes (and a Mongoose warning) that cost write throughput for nothing.
+userSchema.index({ name: 1 });
+
 module.exports = mongoose.model('User', userSchema);
+

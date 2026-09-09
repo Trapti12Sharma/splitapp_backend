@@ -2,7 +2,18 @@ const Expense = require('../models/Expense');
 const Group = require('../models/Group');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { calculateSplits } = require('../services/splitCalculationService');
-const { createNotification } = require('../services/notificationService');
+const { createNotifications } = require('../services/notificationService');
+const { invalidateBalances, invalidateGroupBalances } = require('../services/balanceService');
+
+// Every user whose cached balance an expense touches: the payer plus everyone
+// with a split in it.
+const affectedUserIds = (expense) => {
+  const ids = [(expense.paidBy?._id || expense.paidBy)?.toString()];
+  for (const split of expense.splits) {
+    ids.push((split.user?._id || split.user)?.toString());
+  }
+  return ids.filter(Boolean);
+};
 
 // Helper to build splits from request body
 const buildSplits = (splitType, amount, splitsData) => {
@@ -18,7 +29,11 @@ const buildSplits = (splitType, amount, splitsData) => {
 // @access  Private
 const getExpenses = async (req, res, next) => {
   try {
-    const { group, category, startDate, endDate, search, sortBy = 'date', order = 'desc', page = 1, limit = 20, paidBy } = req.query;
+    const {
+      group, category, startDate, endDate, search,
+      sortBy = 'date', order = 'desc',
+      page = 1, limit = 20, paidBy
+    } = req.query;
 
     const query = {
       $or: [{ paidBy: req.user._id }, { 'splits.user': req.user._id }],
@@ -32,30 +47,38 @@ const getExpenses = async (req, res, next) => {
       if (startDate) query.date.$gte = new Date(startDate);
       if (endDate) query.date.$lte = new Date(endDate);
     }
+    // Use regex for search (text index for full-text would require different approach)
     if (search) {
-      query.description = new RegExp(search, 'i');
+      query.description = { $regex: search, $options: 'i' };
     }
 
     const sortOrder = order === 'asc' ? 1 : -1;
     const sortField = sortBy === 'amount' ? 'amount' : 'date';
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit))); // cap at 50
 
-    const total = await Expense.countDocuments(query);
-    const expenses = await Expense.find(query)
-      .populate('paidBy', 'name username profileImage')
-      .populate('splits.user', 'name username profileImage')
-      .populate('group', 'name')
-      .populate('createdBy', 'name username')
-      .sort({ [sortField]: sortOrder })
-      .skip((parseInt(page) - 1) * parseInt(limit))
-      .limit(parseInt(limit));
+    // Run count and find in parallel for performance
+    const [total, expenses] = await Promise.all([
+      Expense.countDocuments(query),
+      Expense.find(query)
+        .select('-__v') // exclude version key
+        .populate('paidBy', 'name username profileImage')
+        .populate('splits.user', 'name username profileImage')
+        .populate('group', 'name')
+        .populate('createdBy', 'name username')
+        .sort({ [sortField]: sortOrder })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(), // lean() for ~3x faster reads
+    ]);
 
     return successResponse(res, 'Expenses fetched', {
       expenses,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit)),
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum),
       },
     });
   } catch (error) {
@@ -74,7 +97,7 @@ const createExpense = async (req, res, next) => {
 
     // If group expense, verify membership
     if (groupId) {
-      const group = await Group.findById(groupId);
+      const group = await Group.findById(groupId).select('members');
       if (!group) return errorResponse(res, 'Group not found', 404);
       if (!group.isMember(req.user._id)) return errorResponse(res, 'Not a member of this group', 403);
       if (!group.isMember(paidBy)) return errorResponse(res, 'PaidBy must be a group member', 400);
@@ -120,20 +143,28 @@ const createExpense = async (req, res, next) => {
       { path: 'group', select: 'name' },
     ]);
 
-    // Notify all split participants except creator (safe null check)
-    for (const split of expense.splits) {
-      const participantId = split.user?._id?.toString() || split.user?.toString();
-      if (participantId && participantId !== req.user._id.toString()) {
-        await createNotification({
+    // The balances of everyone involved just changed.
+    invalidateBalances(affectedUserIds(expense));
+    if (groupId) invalidateGroupBalances(groupId);
+
+    // Notify all split participants except creator, in one bulk insert rather
+    // than a sequential insert per participant.
+    await createNotifications(
+      expense.splits
+        .map((split) => ({
+          participantId: split.user?._id?.toString() || split.user?.toString(),
+          amount: split.amount,
+        }))
+        .filter(({ participantId }) => participantId && participantId !== req.user._id.toString())
+        .map(({ participantId, amount }) => ({
           userId: participantId,
           type: 'expense_added',
           title: 'New Expense Added',
-          message: `${req.user.name} added "${description}" — your share: ${expense.currency} ${split.amount}`,
+          message: `${req.user.name} added "${description}" — your share: ${expense.currency} ${amount}`,
           relatedExpense: expense._id,
           relatedGroup: groupId || undefined,
-        });
-      }
-    }
+        }))
+    );
 
     return successResponse(res, 'Expense created successfully', { expense }, 201);
   } catch (error) {
@@ -181,10 +212,14 @@ const updateExpense = async (req, res, next) => {
     const isCreator = (expense.createdBy?._id || expense.createdBy)?.toString() === req.user._id.toString();
     let isAdmin = false;
     if (expense.group) {
-      const group = await Group.findById(expense.group._id || expense.group);
+      const group = await Group.findById(expense.group._id || expense.group).select('members');
       isAdmin = group && group.isAdmin(req.user._id);
     }
     if (!isCreator && !isAdmin) return errorResponse(res, 'Not authorized to edit this expense', 403);
+
+    // Snapshot who was involved before the edit, so their cached balances are
+    // invalidated too even if this edit drops them from the splits.
+    const previousParticipants = affectedUserIds(expense);
 
     const { description, amount, currency, category, paidBy, splitType, splits: splitsData, notes, date } = req.body;
 
@@ -245,19 +280,24 @@ const updateExpense = async (req, res, next) => {
       { path: 'group', select: 'name' },
     ]);
 
-    // Notify participants
-    for (const split of expense.splits) {
-      const participantId = (split.user?._id || split.user)?.toString();
-      if (participantId && participantId !== req.user._id.toString()) {
-        await createNotification({
+    // Invalidate for the participants before AND after the edit — a user removed
+    // from the splits also needs their cached balance dropped.
+    invalidateBalances([...previousParticipants, ...affectedUserIds(expense)]);
+    if (expense.group) invalidateGroupBalances(expense.group._id || expense.group);
+
+    // Notify participants (single bulk insert)
+    await createNotifications(
+      expense.splits
+        .map((split) => (split.user?._id || split.user)?.toString())
+        .filter((participantId) => participantId && participantId !== req.user._id.toString())
+        .map((participantId) => ({
           userId: participantId,
           type: 'expense_edited',
           title: 'Expense Updated',
           message: `${req.user.name} updated "${expense.description}"`,
           relatedExpense: expense._id,
-        });
-      }
-    }
+        }))
+    );
 
     return successResponse(res, 'Expense updated successfully', { expense });
   } catch (error) {
@@ -276,26 +316,33 @@ const deleteExpense = async (req, res, next) => {
     const isCreator = (expense.createdBy?._id || expense.createdBy)?.toString() === req.user._id.toString();
     let isAdmin = false;
     if (expense.group) {
-      const group = await Group.findById(expense.group);
+      const group = await Group.findById(expense.group).select('members');
       isAdmin = group && group.isAdmin(req.user._id);
     }
     if (!isCreator && !isAdmin) return errorResponse(res, 'Not authorized to delete this expense', 403);
 
-    // Notify participants before deletion
-    for (const split of expense.splits) {
-      const participantId = split.user.toString();
-      if (participantId !== req.user._id.toString()) {
-        await createNotification({
+    // Notify participants before deletion (single bulk insert)
+    await createNotifications(
+      expense.splits
+        .map((split) => split.user.toString())
+        .filter((participantId) => participantId !== req.user._id.toString())
+        .map((participantId) => ({
           userId: participantId,
           type: 'expense_deleted',
           title: 'Expense Deleted',
           message: `${req.user.name} deleted "${expense.description}"`,
           relatedGroup: expense.group,
-        });
-      }
-    }
+        }))
+    );
+
+    const involved = affectedUserIds(expense);
+    const groupRef = expense.group;
 
     await expense.deleteOne();
+
+    invalidateBalances(involved);
+    if (groupRef) invalidateGroupBalances(groupRef);
+
     return successResponse(res, 'Expense deleted successfully');
   } catch (error) {
     next(error);
@@ -307,23 +354,34 @@ const deleteExpense = async (req, res, next) => {
 // @access  Private (members only)
 const getGroupExpenses = async (req, res, next) => {
   try {
-    const group = await Group.findById(req.params.id);
+    // Membership check only needs the members array, not the whole document.
+    const group = await Group.findById(req.params.id).select('members');
     if (!group) return errorResponse(res, 'Group not found', 404);
     if (!group.isMember(req.user._id)) return errorResponse(res, 'Access denied', 403);
 
     const { page = 1, limit = 20 } = req.query;
-    const total = await Expense.countDocuments({ group: req.params.id });
-    const expenses = await Expense.find({ group: req.params.id })
-      .populate('paidBy', 'name username profileImage')
-      .populate('splits.user', 'name username profileImage')
-      .populate('createdBy', 'name username')
-      .sort({ date: -1 })
-      .skip((parseInt(page) - 1) * parseInt(limit))
-      .limit(parseInt(limit));
+    // Clamp pagination: an unbounded `limit` lets one request pull the whole
+    // collection into memory.
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit) || 20));
+
+    // Count and page are independent — issue them together.
+    const [total, expenses] = await Promise.all([
+      Expense.countDocuments({ group: req.params.id }),
+      Expense.find({ group: req.params.id })
+        .select('-__v')
+        .populate('paidBy', 'name username profileImage')
+        .populate('splits.user', 'name username profileImage')
+        .populate('createdBy', 'name username')
+        .sort({ date: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+    ]);
 
     return successResponse(res, 'Group expenses fetched', {
       expenses,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
     });
   } catch (error) {
     next(error);

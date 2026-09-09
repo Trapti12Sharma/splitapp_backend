@@ -42,5 +42,7 @@ const settlementSchema = new mongoose.Schema(
 settlementSchema.index({ from: 1, createdAt: -1 });
 settlementSchema.index({ to: 1, createdAt: -1 });
 settlementSchema.index({ group: 1, createdAt: -1 });
+// Supports the friend-balance query, which filters on the (from, to) pair.
+settlementSchema.index({ from: 1, to: 1 });
 
 module.exports = mongoose.model('Settlement', settlementSchema);

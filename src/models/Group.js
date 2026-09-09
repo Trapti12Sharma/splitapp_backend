@@ -49,6 +49,11 @@ const groupSchema = new mongoose.Schema(
   }
 );
 
+// getUserGroups queries { 'members.user': userId } on every Groups page load.
+// Without this index that is a full collection scan of every group in the system.
+groupSchema.index({ 'members.user': 1, updatedAt: -1 });
+groupSchema.index({ createdBy: 1 });
+
 // Helper method to check if a user is a member
 // Works whether members are populated (objects) or unpopulated (ObjectIds)
 groupSchema.methods.isMember = function (userId) {

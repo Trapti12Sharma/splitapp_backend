@@ -1,7 +1,9 @@
 /**
  * Global error handling middleware
  */
-const errorHandler = (err, req, res, next) => {
+// The 4th parameter is what marks this as an Express error handler, so it must
+// stay even though it is unused; the underscore satisfies the linter.
+const errorHandler = (err, req, res, _next) => {
   console.error(err.stack);
 
   let statusCode = err.statusCode || 500;

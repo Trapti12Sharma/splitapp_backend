@@ -13,17 +13,18 @@ const {
 const { getGroupExpenses, createExpense } = require('../controllers/expenseController');
 const { protect } = require('../middleware/authMiddleware');
 const { uploadGroupImage, uploadReceipt } = require('../middleware/uploadMiddleware');
+const { uploadLimiter } = require('../middleware/rateLimiters');
 const { groupValidators } = require('../validators/groupValidators');
 
 router.get('/', protect, getUserGroups);
-router.post('/', protect, uploadGroupImage, groupValidators, createGroup);
+router.post('/', protect, uploadLimiter, uploadGroupImage, groupValidators, createGroup);
 router.get('/:id', protect, getGroupById);
-router.put('/:id', protect, uploadGroupImage, updateGroup);
+router.put('/:id', protect, uploadLimiter, uploadGroupImage, updateGroup);
 router.delete('/:id', protect, deleteGroup);
 router.post('/:id/members', protect, addMembers);
 router.delete('/:id/members/:userId', protect, removeMember);
 router.get('/:id/balances', protect, getGroupBalances);
 router.get('/:id/expenses', protect, getGroupExpenses);
-router.post('/:id/expenses', protect, uploadReceipt, createExpense);
+router.post('/:id/expenses', protect, uploadLimiter, uploadReceipt, createExpense);
 
 module.exports = router;

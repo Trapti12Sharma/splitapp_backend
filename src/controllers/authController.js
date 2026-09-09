@@ -11,14 +11,20 @@ const register = async (req, res, next) => {
   try {
     const { name, username, email, password } = req.body;
 
-    // Check for existing user
-    const existingEmail = await User.findOne({ email });
-    if (existingEmail) {
-      return errorResponse(res, 'Email already registered', 400);
-    }
+    // One query covers both uniqueness checks instead of two sequential lookups.
+    const normalisedEmail = String(email).toLowerCase().trim();
+    const normalisedUsername = String(username).toLowerCase().trim();
 
-    const existingUsername = await User.findOne({ username: username.toLowerCase() });
-    if (existingUsername) {
+    const existing = await User.findOne({
+      $or: [{ email: normalisedEmail }, { username: normalisedUsername }],
+    })
+      .select('email username')
+      .lean();
+
+    if (existing) {
+      if (existing.email === normalisedEmail) {
+        return errorResponse(res, 'Email already registered', 400);
+      }
       return errorResponse(res, 'Username already taken', 400);
     }
 
@@ -30,8 +36,8 @@ const register = async (req, res, next) => {
 
     const user = await User.create({
       name,
-      username: username.toLowerCase(),
-      email,
+      username: normalisedUsername,
+      email: normalisedEmail,
       password,
       profileImage,
     });
@@ -55,7 +61,7 @@ const login = async (req, res, next) => {
     const { email, password } = req.body;
 
     // Get user with password field
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: String(email).toLowerCase().trim() }).select('+password');
     if (!user) {
       return errorResponse(res, 'Invalid email or password', 401);
     }

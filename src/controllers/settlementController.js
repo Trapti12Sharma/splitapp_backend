@@ -2,6 +2,7 @@ const Settlement = require('../models/Settlement');
 const User = require('../models/User');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { createNotification } = require('../services/notificationService');
+const { invalidateBalances, invalidateGroupBalances } = require('../services/balanceService');
 
 // @desc    Get user's settlement history
 // @route   GET /api/settlements
@@ -14,18 +15,25 @@ const getSettlements = async (req, res, next) => {
     };
     if (group) query.group = group;
 
-    const total = await Settlement.countDocuments(query);
-    const settlements = await Settlement.find(query)
-      .populate('from', 'name username profileImage')
-      .populate('to', 'name username profileImage')
-      .populate('group', 'name')
-      .sort({ createdAt: -1 })
-      .skip((parseInt(page) - 1) * parseInt(limit))
-      .limit(parseInt(limit));
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(50, Math.max(1, parseInt(limit) || 20));
+
+    // Count and page are independent — issue them together instead of in sequence.
+    const [total, settlements] = await Promise.all([
+      Settlement.countDocuments(query),
+      Settlement.find(query)
+        .populate('from', 'name username profileImage')
+        .populate('to', 'name username profileImage')
+        .populate('group', 'name')
+        .sort({ createdAt: -1 })
+        .skip((pageNum - 1) * limitNum)
+        .limit(limitNum)
+        .lean(),
+    ]);
 
     return successResponse(res, 'Settlements fetched', {
       settlements,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / parseInt(limit)) },
+      pagination: { total, page: pageNum, limit: limitNum, pages: Math.ceil(total / limitNum) },
     });
   } catch (error) {
     next(error);
@@ -49,7 +57,7 @@ const createSettlement = async (req, res, next) => {
       return errorResponse(res, 'Amount must be greater than 0', 400);
     }
 
-    const recipient = await User.findById(to);
+    const recipient = await User.findById(to).select('_id').lean();
     if (!recipient) return errorResponse(res, 'Recipient not found', 404);
 
     const settlement = await Settlement.create({
@@ -66,6 +74,10 @@ const createSettlement = async (req, res, next) => {
       { path: 'to', select: 'name username profileImage' },
       { path: 'group', select: 'name' },
     ]);
+
+    // A settlement changes both sides' balances.
+    invalidateBalances([req.user._id, to]);
+    if (group) invalidateGroupBalances(group);
 
     // Notify recipient
     await createNotification({

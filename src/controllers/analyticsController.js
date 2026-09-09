@@ -1,6 +1,7 @@
+const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
-const Settlement = require('../models/Settlement');
-const { successResponse } = require('../utils/apiResponse');
+const Group = require('../models/Group');
+const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { getUserBalanceSummary } = require('../services/balanceService');
 
 // @desc    Get analytics summary
@@ -188,63 +189,59 @@ const getGroupSpending = async (req, res, next) => {
 // @access  Private (members only)
 const getGroupStats = async (req, res, next) => {
   try {
-    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return errorResponse(res, 'Group not found', 404);
+    }
     const groupId = new mongoose.Types.ObjectId(req.params.id);
-    const Group = require('../models/Group');
 
     const group = await Group.findById(groupId).populate('members.user', 'name username profileImage');
-    if (!group) return require('../utils/apiResponse').errorResponse(res, 'Group not found', 404);
-    if (!group.isMember(req.user._id)) return require('../utils/apiResponse').errorResponse(res, 'Access denied', 403);
+    if (!group) return errorResponse(res, 'Group not found', 404);
+    if (!group.isMember(req.user._id)) return errorResponse(res, 'Access denied', 403);
 
-    // Total group expenses
-    const [totals] = await Expense.aggregate([
+    // Previously: two aggregations plus a find() that pulled every expense in the
+    // group into memory to build per-person totals. A single faceted aggregation
+    // does all of it in one round-trip and keeps the maths in the database.
+    const [facets] = await Expense.aggregate([
       { $match: { group: groupId } },
-      { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
+      {
+        $facet: {
+          totals: [
+            { $group: { _id: null, totalAmount: { $sum: '$amount' }, count: { $sum: 1 } } },
+          ],
+          categories: [
+            { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
+            { $sort: { total: -1 } },
+          ],
+          paidByUser: [
+            { $group: { _id: '$paidBy', totalPaid: { $sum: '$amount' }, expenseCount: { $sum: 1 } } },
+          ],
+          owedByUser: [
+            { $unwind: '$splits' },
+            { $group: { _id: '$splits.user', totalOwed: { $sum: '$splits.amount' } } },
+          ],
+        },
+      },
     ]);
 
-    // Category breakdown for this group
-    const categoryBreakdown = await Expense.aggregate([
-      { $match: { group: groupId } },
-      { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-      { $sort: { total: -1 } },
-    ]);
+    const totals = facets?.totals?.[0];
+    const categoryBreakdown = facets?.categories || [];
 
-    // Per-person stats — how much each person paid and owes in this group
-    const expenses = await Expense.find({ group: groupId }).lean();
-    const memberIds = group.members.filter(m => m.user).map(m => m.user._id.toString());
+    const paidMap = new Map((facets?.paidByUser || []).map((r) => [String(r._id), r]));
+    const owedMap = new Map((facets?.owedByUser || []).map((r) => [String(r._id), r]));
 
-    const personStats = {};
-    memberIds.forEach(id => {
-      personStats[id] = { totalPaid: 0, totalOwed: 0, expenseCount: 0 };
-    });
-
-    for (const exp of expenses) {
-      const payerId = exp.paidBy.toString();
-      if (personStats[payerId] !== undefined) {
-        personStats[payerId].totalPaid += exp.amount;
-        personStats[payerId].expenseCount += 1;
-      }
-      for (const split of exp.splits) {
-        const splitUserId = split.user.toString();
-        if (personStats[splitUserId] !== undefined) {
-          personStats[splitUserId].totalOwed += split.amount;
-        }
-      }
-    }
-
-    // Build enriched per-member stats
     const memberStats = group.members
-      .filter(m => m.user)
-      .map(m => {
+      .filter((m) => m.user)
+      .map((m) => {
         const uid = m.user._id.toString();
-        const stats = personStats[uid] || { totalPaid: 0, totalOwed: 0, expenseCount: 0 };
+        const totalPaid = paidMap.get(uid)?.totalPaid || 0;
+        const totalOwed = owedMap.get(uid)?.totalOwed || 0;
         return {
           user: m.user,
           role: m.role,
-          totalPaid: Math.round(stats.totalPaid * 100) / 100,
-          totalOwed: Math.round(stats.totalOwed * 100) / 100,
-          netBalance: Math.round((stats.totalPaid - stats.totalOwed) * 100) / 100,
-          expenseCount: stats.expenseCount,
+          totalPaid: Math.round(totalPaid * 100) / 100,
+          totalOwed: Math.round(totalOwed * 100) / 100,
+          netBalance: Math.round((totalPaid - totalOwed) * 100) / 100,
+          expenseCount: paidMap.get(uid)?.expenseCount || 0,
         };
       });
 
@@ -252,7 +249,7 @@ const getGroupStats = async (req, res, next) => {
       totalAmount: Math.round((totals?.totalAmount || 0) * 100) / 100,
       totalExpenses: totals?.count || 0,
       memberCount: group.members.length,
-      categoryBreakdown: categoryBreakdown.map(c => ({
+      categoryBreakdown: categoryBreakdown.map((c) => ({
         category: c._id || 'Other',
         total: Math.round(c.total * 100) / 100,
         count: c.count,

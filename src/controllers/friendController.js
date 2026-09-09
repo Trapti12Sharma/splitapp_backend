@@ -12,24 +12,26 @@ const getFriends = async (req, res, next) => {
   try {
     const userId = req.user._id;
 
-    const friendships = await Friendship.find({
-      $or: [{ requester: userId }, { receiver: userId }],
-      status: 'accepted',
-    }).populate('requester receiver', 'name username email profileImage');
+    // The friendship list and the balance map are independent — build them together.
+    const [friendships, balanceMap] = await Promise.all([
+      Friendship.find({
+        $or: [{ requester: userId }, { receiver: userId }],
+        status: 'accepted',
+      })
+        .populate('requester receiver', 'name username profileImage')
+        .lean(),
+      calculateUserBalances(userId),
+    ]);
 
-    // Build list of friends
-    const balanceMap = await calculateUserBalances(userId);
-
-    const friends = friendships.map((f) => {
-      const friend = f.requester._id.toString() === userId.toString() ? f.receiver : f.requester;
-      const balance = balanceMap[friend._id.toString()] || 0;
-      return {
-        friendshipId: f._id,
-        friend,
-        balance,
-        // positive: friend owes me; negative: I owe friend
-      };
-    });
+    const friends = friendships
+      // A deleted account leaves a dangling reference that populate resolves to null.
+      .filter((f) => f.requester && f.receiver)
+      .map((f) => {
+        const isRequester = f.requester._id.toString() === userId.toString();
+        const friend = isRequester ? f.receiver : f.requester;
+        const balance = balanceMap[friend._id.toString()] || 0;
+        return { friendshipId: f._id, friend, balance };
+      });
 
     return successResponse(res, 'Friends fetched', { friends });
   } catch (error) {
@@ -45,7 +47,9 @@ const getFriendRequests = async (req, res, next) => {
     const requests = await Friendship.find({
       receiver: req.user._id,
       status: 'pending',
-    }).populate('requester', 'name username email profileImage');
+    })
+      .populate('requester', 'name username email profileImage')
+      .lean();
 
     return successResponse(res, 'Friend requests fetched', { requests });
   } catch (error) {
@@ -75,6 +79,7 @@ const sendFriendRequest = async (req, res, next) => {
         { requester: receiverId, receiver: requesterId },
       ],
     });
+
 
     if (existing) {
       if (existing.status === 'accepted') return errorResponse(res, 'Already friends', 400);

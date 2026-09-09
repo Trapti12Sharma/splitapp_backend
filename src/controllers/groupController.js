@@ -1,8 +1,8 @@
 const Group = require('../models/Group');
 const User = require('../models/User');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
-const { createNotification } = require('../services/notificationService');
-const { calculateGroupBalances } = require('../services/balanceService');
+const { createNotifications } = require('../services/notificationService');
+const { calculateGroupBalances, invalidateGroupBalances } = require('../services/balanceService');
 
 // @desc    Get user's groups
 // @route   GET /api/groups
@@ -12,7 +12,8 @@ const getUserGroups = async (req, res, next) => {
     const groups = await Group.find({ 'members.user': req.user._id })
       .populate('members.user', 'name username profileImage')
       .populate('createdBy', 'name username profileImage')
-      .sort({ updatedAt: -1 });
+      .sort({ updatedAt: -1 })
+      .lean();
 
     return successResponse(res, 'Groups fetched', { groups });
   } catch (error) {
@@ -56,18 +57,18 @@ const createGroup = async (req, res, next) => {
 
     await group.populate('members.user', 'name username profileImage');
 
-    // Notify added members
-    for (const member of group.members) {
-      if (member.user._id.toString() !== req.user._id.toString()) {
-        await createNotification({
+    // Notify added members in a single insert rather than one per member.
+    await createNotifications(
+      group.members
+        .filter((member) => member.user._id.toString() !== req.user._id.toString())
+        .map((member) => ({
           userId: member.user._id,
           type: 'group_added',
           title: 'Added to Group',
           message: `${req.user.name} added you to the group "${group.name}"`,
           relatedGroup: group._id,
-        });
-      }
-    }
+        }))
+    );
 
     return successResponse(res, 'Group created successfully', { group }, 201);
   } catch (error) {
@@ -130,6 +131,7 @@ const deleteGroup = async (req, res, next) => {
     if (!group.isAdmin(req.user._id)) return errorResponse(res, 'Only admins can delete the group', 403);
 
     await group.deleteOne();
+    invalidateGroupBalances(group._id);
     return successResponse(res, 'Group deleted successfully');
   } catch (error) {
     next(error);
@@ -150,29 +152,34 @@ const addMembers = async (req, res, next) => {
       return errorResponse(res, 'memberIds array is required', 400);
     }
 
-    const added = [];
-    for (const id of memberIds) {
-      if (!group.isMember(id)) {
-        const user = await User.findById(id);
-        if (user) {
-          group.members.push({ user: id, role: 'member', joinedAt: new Date() });
-          added.push(user);
+    // Resolve every candidate in one query instead of a findById per id, and
+    // send the notifications as a single bulk insert.
+    const candidateIds = memberIds.filter((id) => !group.isMember(id));
+    const users = candidateIds.length
+      ? await User.find({ _id: { $in: candidateIds } }).select('_id').lean()
+      : [];
 
-          await createNotification({
-            userId: id,
-            type: 'group_added',
-            title: 'Added to Group',
-            message: `${req.user.name} added you to the group "${group.name}"`,
-            relatedGroup: group._id,
-          });
-        }
-      }
+    for (const user of users) {
+      group.members.push({ user: user._id, role: 'member', joinedAt: new Date() });
     }
 
-    await group.save();
+    if (users.length > 0) {
+      await group.save();
+      invalidateGroupBalances(group._id);
+      await createNotifications(
+        users.map((user) => ({
+          userId: user._id,
+          type: 'group_added',
+          title: 'Added to Group',
+          message: `${req.user.name} added you to the group "${group.name}"`,
+          relatedGroup: group._id,
+        }))
+      );
+    }
+
     await group.populate('members.user', 'name username profileImage');
 
-    return successResponse(res, `${added.length} member(s) added`, { group });
+    return successResponse(res, `${users.length} member(s) added`, { group });
   } catch (error) {
     next(error);
   }
@@ -197,6 +204,7 @@ const removeMember = async (req, res, next) => {
       return memberId !== targetUserId;
     });
     await group.save();
+    invalidateGroupBalances(group._id);
 
     return successResponse(res, 'Member removed successfully');
   } catch (error) {

@@ -104,10 +104,17 @@ const expenseSchema = new mongoose.Schema(
   }
 );
 
-// Indexes for efficient querying
+// Indexes for efficient querying at scale
 expenseSchema.index({ group: 1, date: -1 });
 expenseSchema.index({ 'splits.user': 1, date: -1 });
 expenseSchema.index({ paidBy: 1, date: -1 });
 expenseSchema.index({ createdBy: 1, date: -1 });
+// Compound index for user expense list (most common query)
+expenseSchema.index({ paidBy: 1, group: 1, date: -1 });
+expenseSchema.index({ 'splits.user': 1, group: 1, date: -1 });
+// Supports the friend-balance query: { paidBy, 'splits.user' }
+expenseSchema.index({ paidBy: 1, 'splits.user': 1 });
+// Text index for search
+expenseSchema.index({ description: 'text' });
 
 module.exports = mongoose.model('Expense', expenseSchema);

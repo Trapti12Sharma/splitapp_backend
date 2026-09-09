@@ -8,6 +8,11 @@ const Expense = require('../src/models/Expense');
 const Settlement = require('../src/models/Settlement');
 const Notification = require('../src/models/Notification');
 
+/**
+ * Demo accounts use clearly synthetic identities ("Demo User N") rather than
+ * names that read as real people, so this data is unambiguously placeholder
+ * content and never mistaken for someone's actual account.
+ */
 const seed = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
@@ -27,24 +32,24 @@ const seed = async () => {
     // Create users
     const password = await bcrypt.hash('password123', 12);
     const users = await User.insertMany([
-      { name: 'Trapti Sharma', username: 'trapti', email: 'trapti@example.com', password },
-      { name: 'Rahul Gupta', username: 'rahul', email: 'rahul@example.com', password },
-      { name: 'Priya Singh', username: 'priya', email: 'priya@example.com', password },
-      { name: 'Aman Verma', username: 'aman', email: 'aman@example.com', password },
-      { name: 'Neha Joshi', username: 'neha', email: 'neha@example.com', password },
+      { name: 'Demo User One', username: 'demo_user1', email: 'demo.user1@example.com', password },
+      { name: 'Demo User Two', username: 'demo_user2', email: 'demo.user2@example.com', password },
+      { name: 'Demo User Three', username: 'demo_user3', email: 'demo.user3@example.com', password },
+      { name: 'Demo User Four', username: 'demo_user4', email: 'demo.user4@example.com', password },
+      { name: 'Demo User Five', username: 'demo_user5', email: 'demo.user5@example.com', password },
     ]);
     console.log(`Created ${users.length} users`);
 
-    const [trapti, rahul, priya, aman, neha] = users;
+    const [user1, user2, user3, user4, user5] = users;
 
     // Create friendships
     await Friendship.insertMany([
-      { requester: trapti._id, receiver: rahul._id, status: 'accepted' },
-      { requester: trapti._id, receiver: priya._id, status: 'accepted' },
-      { requester: trapti._id, receiver: aman._id, status: 'accepted' },
-      { requester: rahul._id, receiver: priya._id, status: 'accepted' },
-      { requester: aman._id, receiver: neha._id, status: 'accepted' },
-      { requester: trapti._id, receiver: neha._id, status: 'pending' },
+      { requester: user1._id, receiver: user2._id, status: 'accepted' },
+      { requester: user1._id, receiver: user3._id, status: 'accepted' },
+      { requester: user1._id, receiver: user4._id, status: 'accepted' },
+      { requester: user2._id, receiver: user3._id, status: 'accepted' },
+      { requester: user4._id, receiver: user5._id, status: 'accepted' },
+      { requester: user1._id, receiver: user5._id, status: 'pending' },
     ]);
     console.log('Created friendships');
 
@@ -52,23 +57,23 @@ const seed = async () => {
     const roommates = await Group.create({
       name: 'Roommates',
       description: 'Shared apartment expenses',
-      createdBy: trapti._id,
+      createdBy: user1._id,
       members: [
-        { user: trapti._id, role: 'admin', joinedAt: new Date() },
-        { user: rahul._id, role: 'member', joinedAt: new Date() },
-        { user: priya._id, role: 'member', joinedAt: new Date() },
+        { user: user1._id, role: 'admin', joinedAt: new Date() },
+        { user: user2._id, role: 'member', joinedAt: new Date() },
+        { user: user3._id, role: 'member', joinedAt: new Date() },
       ],
     });
 
-    const goa = await Group.create({
-      name: 'Trip to Goa',
-      description: 'Goa trip expenses - Dec 2024',
-      createdBy: aman._id,
+    const trip = await Group.create({
+      name: 'Weekend Trip',
+      description: 'Group trip expenses',
+      createdBy: user4._id,
       members: [
-        { user: aman._id, role: 'admin', joinedAt: new Date() },
-        { user: trapti._id, role: 'member', joinedAt: new Date() },
-        { user: rahul._id, role: 'member', joinedAt: new Date() },
-        { user: neha._id, role: 'member', joinedAt: new Date() },
+        { user: user4._id, role: 'admin', joinedAt: new Date() },
+        { user: user1._id, role: 'member', joinedAt: new Date() },
+        { user: user2._id, role: 'member', joinedAt: new Date() },
+        { user: user5._id, role: 'member', joinedAt: new Date() },
       ],
     });
     console.log('Created groups');
@@ -81,15 +86,15 @@ const seed = async () => {
         amount: 30000,
         currency: 'INR',
         category: 'Rent',
-        paidBy: trapti._id,
+        paidBy: user1._id,
         splitType: 'equal',
         splits: [
-          { user: trapti._id, amount: 10000 },
-          { user: rahul._id, amount: 10000 },
-          { user: priya._id, amount: 10000 },
+          { user: user1._id, amount: 10000 },
+          { user: user2._id, amount: 10000 },
+          { user: user3._id, amount: 10000 },
         ],
         date: new Date('2024-11-01'),
-        createdBy: trapti._id,
+        createdBy: user1._id,
       },
       {
         group: roommates._id,
@@ -97,49 +102,49 @@ const seed = async () => {
         amount: 1800,
         currency: 'INR',
         category: 'Utilities',
-        paidBy: rahul._id,
+        paidBy: user2._id,
         splitType: 'equal',
         splits: [
-          { user: trapti._id, amount: 600 },
-          { user: rahul._id, amount: 600 },
-          { user: priya._id, amount: 600 },
+          { user: user1._id, amount: 600 },
+          { user: user2._id, amount: 600 },
+          { user: user3._id, amount: 600 },
         ],
         date: new Date('2024-11-05'),
-        createdBy: rahul._id,
+        createdBy: user2._id,
       },
       {
-        group: goa._id,
+        group: trip._id,
         description: 'Hotel Booking',
         amount: 12000,
         currency: 'INR',
         category: 'Travel',
-        paidBy: aman._id,
+        paidBy: user4._id,
         splitType: 'equal',
         splits: [
-          { user: aman._id, amount: 3000 },
-          { user: trapti._id, amount: 3000 },
-          { user: rahul._id, amount: 3000 },
-          { user: neha._id, amount: 3000 },
+          { user: user4._id, amount: 3000 },
+          { user: user1._id, amount: 3000 },
+          { user: user2._id, amount: 3000 },
+          { user: user5._id, amount: 3000 },
         ],
         date: new Date('2024-12-10'),
-        createdBy: aman._id,
+        createdBy: user4._id,
       },
       {
-        group: goa._id,
+        group: trip._id,
         description: 'Dinner at Beach Restaurant',
         amount: 2400,
         currency: 'INR',
         category: 'Food',
-        paidBy: trapti._id,
+        paidBy: user1._id,
         splitType: 'percentage',
         splits: [
-          { user: aman._id, amount: 600, percentage: 25 },
-          { user: trapti._id, amount: 720, percentage: 30 },
-          { user: rahul._id, amount: 600, percentage: 25 },
-          { user: neha._id, amount: 480, percentage: 20 },
+          { user: user4._id, amount: 600, percentage: 25 },
+          { user: user1._id, amount: 720, percentage: 30 },
+          { user: user2._id, amount: 600, percentage: 25 },
+          { user: user5._id, amount: 480, percentage: 20 },
         ],
         date: new Date('2024-12-11'),
-        createdBy: trapti._id,
+        createdBy: user1._id,
       },
       {
         group: roommates._id,
@@ -147,15 +152,15 @@ const seed = async () => {
         amount: 3600,
         currency: 'INR',
         category: 'Groceries',
-        paidBy: priya._id,
+        paidBy: user3._id,
         splitType: 'shares',
         splits: [
-          { user: trapti._id, amount: 1800, shares: 2 },
-          { user: rahul._id, amount: 900, shares: 1 },
-          { user: priya._id, amount: 900, shares: 1 },
+          { user: user1._id, amount: 1800, shares: 2 },
+          { user: user2._id, amount: 900, shares: 1 },
+          { user: user3._id, amount: 900, shares: 1 },
         ],
         date: new Date('2024-11-15'),
-        createdBy: priya._id,
+        createdBy: user3._id,
       },
       {
         // Personal expense between two friends
@@ -164,14 +169,14 @@ const seed = async () => {
         amount: 800,
         currency: 'INR',
         category: 'Entertainment',
-        paidBy: trapti._id,
+        paidBy: user1._id,
         splitType: 'equal',
         splits: [
-          { user: trapti._id, amount: 400 },
-          { user: rahul._id, amount: 400 },
+          { user: user1._id, amount: 400 },
+          { user: user2._id, amount: 400 },
         ],
         date: new Date('2024-11-20'),
-        createdBy: trapti._id,
+        createdBy: user1._id,
       },
     ]);
     console.log(`Created ${expenses.length} expenses`);
@@ -179,8 +184,8 @@ const seed = async () => {
     // Create settlements
     await Settlement.insertMany([
       {
-        from: rahul._id,
-        to: trapti._id,
+        from: user2._id,
+        to: user1._id,
         amount: 5000,
         currency: 'INR',
         note: 'Rent payment',
@@ -188,12 +193,12 @@ const seed = async () => {
         createdAt: new Date('2024-11-10'),
       },
       {
-        from: rahul._id,
-        to: aman._id,
+        from: user2._id,
+        to: user4._id,
         amount: 3000,
         currency: 'INR',
-        note: 'Hotel payment for Goa trip',
-        group: goa._id,
+        note: 'Hotel payment for trip',
+        group: trip._id,
         createdAt: new Date('2024-12-12'),
       },
     ]);
@@ -202,18 +207,18 @@ const seed = async () => {
     // Create sample notifications
     await Notification.insertMany([
       {
-        user: rahul._id,
+        user: user2._id,
         type: 'expense_added',
         title: 'New Expense',
-        message: 'Trapti added "Monthly Rent" - your share is INR 10000',
+        message: `${user1.name} added "Monthly Rent" - your share is INR 10000`,
         isRead: false,
         createdAt: new Date('2024-11-01'),
       },
       {
-        user: trapti._id,
+        user: user1._id,
         type: 'settlement_received',
         title: 'Payment Received',
-        message: 'Rahul paid you INR 5000 - Rent payment',
+        message: `${user2.name} paid you INR 5000 - Rent payment`,
         isRead: true,
         createdAt: new Date('2024-11-10'),
       },

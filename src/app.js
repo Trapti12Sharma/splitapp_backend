@@ -37,19 +37,33 @@ app.use(
 app.set('etag', false);
 
 // CORS — allow client URL (supports multiple origins for dev + prod)
+//
+// The `else` branch here used to call `callback(null, true)` too — meaning
+// EVERY origin was approved regardless of the allowlist, while still setting
+// `credentials: true`. In practice a browser can't read the response unless
+// it already has a way to attach the victim's credentials (this app keeps
+// its JWT in localStorage, not a cookie, so that specific abuse path was
+// closed), but it's still a textbook CORS misconfiguration that any scanner
+// flags immediately, and it defeated the entire point of having an
+// allowlist. Non-matching origins are now actually rejected.
 const allowedOrigins = [
   process.env.CLIENT_URL || 'http://localhost:5173',
   'http://localhost:5173',
+  'https://oursplitapp.vercel.app', // production frontend — kept as a fallback in case CLIENT_URL isn't set on the host
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (mobile apps, Postman, server-to-server)
+      // No `origin` header means the request isn't a browser cross-origin
+      // call at all (curl, Postman, server-to-server, most mobile clients) —
+      // there's no origin to check, so let it through.
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, true); // In production you can restrict this
+        const err = new Error('Not allowed by CORS');
+        err.statusCode = 403;
+        callback(err);
       }
     },
     credentials: true,

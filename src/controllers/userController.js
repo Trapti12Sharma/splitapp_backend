@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Friendship = require('../models/Friendship');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { invalidateUser } = require('../middleware/authMiddleware');
 
@@ -40,14 +41,42 @@ const searchUsers = async (req, res, next) => {
 // @desc    Get user by ID
 // @route   GET /api/users/:id
 // @access  Private
+//
+// This used to return the full document (minus password/reset-token fields)
+// to ANY authenticated caller — including `email`. Combined with search
+// returning real user IDs for any name/username fragment, that meant a
+// total stranger could search for someone and immediately read their email
+// with no relationship required at all. Email is now only included for the
+// user's own profile or for a confirmed (accepted) friend.
 const getUserById = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id)
-      .select('-password -resetPasswordToken -resetPasswordExpires')
-      .lean();
+    const isSelf = req.params.id === req.user._id.toString();
+
+    const [user, friendship] = await Promise.all([
+      User.findById(req.params.id)
+        .select('-password -resetPasswordToken -resetPasswordExpires')
+        .lean(),
+      isSelf
+        ? null
+        : Friendship.findOne({
+            status: 'accepted',
+            $or: [
+              { requester: req.user._id, receiver: req.params.id },
+              { requester: req.params.id, receiver: req.user._id },
+            ],
+          })
+            .select('_id')
+            .lean(),
+    ]);
+
     if (!user) {
       return errorResponse(res, 'User not found', 404);
     }
+
+    if (!isSelf && !friendship) {
+      delete user.email;
+    }
+
     return successResponse(res, 'User fetched', { user });
   } catch (error) {
     next(error);

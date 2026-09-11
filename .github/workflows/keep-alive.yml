@@ -21,9 +21,7 @@ jobs:
     steps:
       - name: Ping health endpoint
         run: |
-          # TODO: replace with your actual Render URL (Render dashboard -> your
-          # service -> the URL at the top, e.g. https://splitapp-backend-xxxx.onrender.com)
-          URL="https://REPLACE_WITH_YOUR_RENDER_URL.onrender.com/api/health"
+          URL="https://splitapp-backend-p2hz.onrender.com/api/health"
           echo "Pinging $URL"
           status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL")
           echo "Response status: $status"

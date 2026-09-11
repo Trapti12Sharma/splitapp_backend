@@ -1,0 +1,32 @@
+name: Keep backend warm
+
+# Render's free tier spins the service down after ~15 minutes with no
+# requests, so the next real visitor eats a 30–60s cold start while it wakes
+# back up — that's the "app is taking load sometimes" slowness. This pings
+# the health endpoint every 10 minutes, well inside that window, so Render
+# never sees the service go idle in the first place.
+#
+# Requires no secrets and no extra hosting — GitHub runs this on its own
+# schedule for free as long as the workflow file lives on the repo's default
+# branch. GitHub may delay a `schedule` trigger by a few minutes under load;
+# that's fine here, there's no tight timing requirement.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          # TODO: replace with your actual Render URL (Render dashboard -> your
+          # service -> the URL at the top, e.g. https://splitapp-backend-xxxx.onrender.com)
+          URL="https://REPLACE_WITH_YOUR_RENDER_URL.onrender.com/api/health"
+          echo "Pinging $URL"
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL")
+          echo "Response status: $status"
+          if [ "$status" != "200" ]; then
+            echo "::warning::Health check returned $status instead of 200"
+          fi

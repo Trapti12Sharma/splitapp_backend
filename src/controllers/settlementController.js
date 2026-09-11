@@ -43,26 +43,32 @@ const getSettlements = async (req, res, next) => {
 // @desc    Create a settlement
 // @route   POST /api/settlements
 // @access  Private
+//
+// Only the person who actually received the money can record a settlement.
+// It used to be the opposite — whoever called this endpoint was recorded as
+// the payer (`from: req.user._id`) — which let a debtor unilaterally erase
+// their own debt with no confirmation from the person they supposedly paid.
+// Now the caller is always the receiver (`to`); they pick who paid them.
 const createSettlement = async (req, res, next) => {
   try {
-    const { to, amount, currency, note, group } = req.body;
+    const { from, amount, currency, note, group } = req.body;
 
-    if (!to || !amount) {
-      return errorResponse(res, 'Recipient and amount are required', 400);
+    if (!from || !amount) {
+      return errorResponse(res, 'Payer and amount are required', 400);
     }
-    if (to === req.user._id.toString()) {
+    if (from === req.user._id.toString()) {
       return errorResponse(res, 'Cannot settle with yourself', 400);
     }
     if (parseFloat(amount) <= 0) {
       return errorResponse(res, 'Amount must be greater than 0', 400);
     }
 
-    const recipient = await User.findById(to).select('_id').lean();
-    if (!recipient) return errorResponse(res, 'Recipient not found', 404);
+    const payer = await User.findById(from).select('_id').lean();
+    if (!payer) return errorResponse(res, 'Payer not found', 404);
 
     const settlement = await Settlement.create({
-      from: req.user._id,
-      to,
+      from,
+      to: req.user._id,
       amount: parseFloat(amount),
       currency: currency || 'INR',
       note,
@@ -76,15 +82,15 @@ const createSettlement = async (req, res, next) => {
     ]);
 
     // A settlement changes both sides' balances.
-    invalidateBalances([req.user._id, to]);
+    invalidateBalances([req.user._id, from]);
     if (group) invalidateGroupBalances(group);
 
-    // Notify recipient
+    // Notify the payer that their payment was confirmed.
     await createNotification({
-      userId: to,
+      userId: from,
       type: 'settlement_received',
-      title: 'Payment Received',
-      message: `${req.user.name} paid you ${currency || 'INR'} ${amount}${note ? ` - "${note}"` : ''}`,
+      title: 'Payment Confirmed',
+      message: `${req.user.name} confirmed receiving ${currency || 'INR'} ${amount} from you${note ? ` - "${note}"` : ''}`,
       relatedUser: req.user._id,
     });
 

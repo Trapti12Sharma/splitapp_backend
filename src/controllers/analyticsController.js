@@ -217,6 +217,11 @@ const getGroupStats = async (req, res, next) => {
           ],
           owedByUser: [
             { $unwind: '$splits' },
+            // Exclude the payer's own split — the payer's "share" is part of what
+            // they paid out, not a debt they owe to themselves. Without this filter,
+            // a member who paid an expense gets their own share counted in totalOwed,
+            // making netBalance (totalPaid - totalOwed) incorrectly close to zero.
+            { $match: { $expr: { $ne: ['$splits.user', '$paidBy'] } } },
             { $group: { _id: '$splits.user', totalOwed: { $sum: '$splits.amount' } } },
           ],
         },

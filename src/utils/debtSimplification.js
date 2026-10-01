@@ -2,23 +2,33 @@
  * Debt Simplification Algorithm
  * Reduces the number of transactions needed to settle all debts.
  *
- * Input: array of { from, to, amount } objects
- * Output: simplified array of { from, to, amount } objects
+ * Accepts either:
+ *   - an array of { from, to, amount } pairwise debt objects, OR
+ *   - a pre-computed net balance map { userId: netAmount } where
+ *     positive = creditor (is owed money), negative = debtor (owes money).
+ *
+ * Output: simplified array of { from, to, amount } objects.
  */
 
-const simplifyDebts = (transactions) => {
-  // Build net balance map: userId -> net amount
-  const balanceMap = {};
+const simplifyDebts = (input) => {
+  let balanceMap = {};
 
-  for (const txn of transactions) {
-    const fromKey = txn.from.toString();
-    const toKey = txn.to.toString();
+  if (Array.isArray(input)) {
+    // Pairwise transaction format: { from, to, amount }
+    for (const txn of input) {
+      const fromKey = txn.from.toString();
+      const toKey = txn.to.toString();
 
-    if (!balanceMap[fromKey]) balanceMap[fromKey] = 0;
-    if (!balanceMap[toKey]) balanceMap[toKey] = 0;
+      if (!balanceMap[fromKey]) balanceMap[fromKey] = 0;
+      if (!balanceMap[toKey]) balanceMap[toKey] = 0;
 
-    balanceMap[fromKey] -= txn.amount; // from owes -> negative
-    balanceMap[toKey] += txn.amount;   // to receives -> positive
+      balanceMap[fromKey] -= txn.amount; // from owes -> negative
+      balanceMap[toKey] += txn.amount;   // to receives -> positive
+    }
+  } else {
+    // Pre-computed net map: { userId: netAmount }
+    // Positive = creditor, negative = debtor.
+    balanceMap = { ...input };
   }
 
   // Separate into creditors (positive) and debtors (negative)

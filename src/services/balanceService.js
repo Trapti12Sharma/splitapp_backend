@@ -153,7 +153,9 @@ const getUserBalanceSummary = async (userId, precomputedMap = null) => {
  */
 const calculateGroupBalances = async (groupId, memberIds) => {
   const memberIdStrings = memberIds.map((id) => id.toString());
-  const cacheKey = `group:${groupId.toString()}:${memberIdStrings.join(',')}`;
+  // Sort IDs so the cache key is stable regardless of member fetch order.
+  const sortedIds = [...memberIdStrings].sort();
+  const cacheKey = `group:${groupId.toString()}:${sortedIds.join(',')}`;
 
   const cached = balanceCache.get(cacheKey);
   if (cached) {
@@ -165,7 +167,9 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     Settlement.find({ group: groupId }).select(SETTLEMENT_BALANCE_FIELDS).lean(),
   ]);
 
-  // Net balance per member within group
+  // Net balance per member within group.
+  // Positive = this member is owed money (paid more than their share).
+  // Negative = this member owes money (their share exceeds what they paid).
   const netMap = {};
   memberIdStrings.forEach((id) => { netMap[id] = 0; });
 
@@ -186,7 +190,9 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     }
   }
 
-  // Apply settlements
+  // Apply group-scoped settlements.
+  // `from` is the payer: their balance improves (they discharged cash).
+  // `to` is the receiver: their "credit" shrinks (they received cash back).
   for (const settlement of settlements) {
     const fromStr = settlement.from.toString();
     const toStr = settlement.to.toString();
@@ -194,26 +200,17 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     if (netMap[toStr] !== undefined) netMap[toStr] -= settlement.amount;
   }
 
-  // Round
+  // Round to 2 dp
   for (const key of Object.keys(netMap)) {
     netMap[key] = round2(netMap[key]);
   }
 
-  // Build raw transactions for simplification
-  const rawTransactions = [];
-  const memberBalances = Object.entries(netMap);
-
-  // Build who-owes-whom from net positions
-  const creditors = memberBalances.filter(([, v]) => v > 0.01).map(([id, v]) => ({ id, amount: v }));
-  const debtors = memberBalances.filter(([, v]) => v < -0.01).map(([id, v]) => ({ id, amount: Math.abs(v) }));
-
-  for (const debtor of debtors) {
-    for (const creditor of creditors) {
-      rawTransactions.push({ from: debtor.id, to: creditor.id, amount: Math.min(debtor.amount, creditor.amount) });
-    }
-  }
-
-  const simplified = simplifyDebts(rawTransactions);
+  // Pass the net map directly to simplifyDebts. The previous code built
+  // a cartesian product of debtor×creditor pairs and fed that into
+  // simplifyDebts, which then recomputed net balances from those pairs — the
+  // double-computation produced wrong amounts and wrong creditor assignments.
+  // simplifyDebts now accepts a pre-computed net map directly.
+  const simplified = simplifyDebts(netMap);
 
   const result = { memberBalances: netMap, whoOwesWhom: simplified };
   balanceCache.set(cacheKey, result);

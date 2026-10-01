@@ -100,12 +100,12 @@ const getGroupById = async (req, res, next) => {
 
 // @desc    Update group
 // @route   PUT /api/groups/:id
-// @access  Private (admin only)
+// @access  Private (members only — any member can edit name/image/description)
 const updateGroup = async (req, res, next) => {
   try {
     const group = await Group.findById(req.params.id);
     if (!group) return errorResponse(res, 'Group not found', 404);
-    if (!group.isAdmin(req.user._id)) return errorResponse(res, 'Only admins can update the group', 403);
+    if (!group.isMember(req.user._id)) return errorResponse(res, 'You must be a group member to edit it', 403);
 
     const { name, description } = req.body;
     if (name) group.name = name;
@@ -140,12 +140,12 @@ const deleteGroup = async (req, res, next) => {
 
 // @desc    Add members to group
 // @route   POST /api/groups/:id/members
-// @access  Private (admin only)
+// @access  Private (members only — any member can add others)
 const addMembers = async (req, res, next) => {
   try {
     const group = await Group.findById(req.params.id);
     if (!group) return errorResponse(res, 'Group not found', 404);
-    if (!group.isAdmin(req.user._id)) return errorResponse(res, 'Only admins can add members', 403);
+    if (!group.isMember(req.user._id)) return errorResponse(res, 'You must be a group member to add others', 403);
 
     const { memberIds } = req.body;
     if (!memberIds || !Array.isArray(memberIds) || memberIds.length === 0) {

@@ -73,6 +73,28 @@ app.use(
   })
 );
 
+// Health check — placed before the rate limiter so keep-alive pings
+// from the cron job (and the frontend warmup fetch) don't burn through
+// the general request quota.
+app.get('/api/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'SplitApp API is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// Readiness check — reports whether the database is actually usable, so a load
+// balancer can stop routing to an instance that has lost its connection.
+app.get('/api/ready', (req, res) => {
+  const mongoose = require('mongoose');
+  const connected = mongoose.connection.readyState === 1;
+  res.status(connected ? 200 : 503).json({
+    success: connected,
+    database: connected ? 'connected' : 'disconnected',
+  });
+});
+
 app.use(generalLimiter);
 
 // Body parsing. 10mb was well above what any JSON route needs; file uploads go
@@ -101,26 +123,6 @@ app.use('/api/balances', require('./routes/balanceRoutes'));
 app.use('/api/settlements', require('./routes/settlementRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({
-    success: true,
-    message: 'SplitApp API is running',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-// Readiness check — reports whether the database is actually usable, so a load
-// balancer can stop routing to an instance that has lost its connection.
-app.get('/api/ready', (req, res) => {
-  const mongoose = require('mongoose');
-  const connected = mongoose.connection.readyState === 1;
-  res.status(connected ? 200 : 503).json({
-    success: connected,
-    database: connected ? 'connected' : 'disconnected',
-  });
-});
 
 // 404 handler
 app.use((req, res) => {

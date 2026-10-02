@@ -1,9 +1,47 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
+const http = require('http');
 const app = require('./app');
 const connectDB = require('./config/database');
 
 const PORT = process.env.PORT || 5000;
+
+/**
+ * Self-ping keeps Render's free tier from spinning down.
+ *
+ * Render idles a service after ~15 minutes with no inbound traffic.
+ * GitHub Actions `schedule` cron is unreliable on free accounts — jobs
+ * can be delayed 10–30 min, which means a 10-min cron still misses the
+ * window. A setInterval inside the server itself fires exactly on time
+ * because it runs in the same process — no external scheduler involved.
+ *
+ * Interval: 10 min (600 000 ms) — comfortably inside the 15-min idle window
+ * even if Node's event loop is slightly busy. Uses the built-in `http` module
+ * so there are no extra dependencies.
+ */
+const startSelfPing = (port) => {
+  const INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+  const pingUrl = `http://localhost:${port}/api/health`;
+
+  const ping = () => {
+    const req = http.get(pingUrl, (res) => {
+      // Drain the response so the socket is released cleanly.
+      res.resume();
+      console.log(`[keep-alive] self-ping → ${res.statusCode}`);
+    });
+    req.on('error', (err) => {
+      // Non-fatal — the next interval will retry.
+      console.warn(`[keep-alive] self-ping failed: ${err.message}`);
+    });
+    req.setTimeout(10000, () => req.destroy());
+  };
+
+  // Unref so the interval never prevents a graceful shutdown.
+  const timer = setInterval(ping, INTERVAL_MS);
+  timer.unref();
+
+  console.log(`[keep-alive] self-ping scheduled every ${INTERVAL_MS / 60000} min`);
+};
 
 const startServer = async () => {
   try {
@@ -13,6 +51,12 @@ const startServer = async () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🌐 Client URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+
+      // Start self-ping only in production (Render). In dev the server is
+      // never idle long enough to need it, and the noise clutters the console.
+      if (process.env.NODE_ENV === 'production') {
+        startSelfPing(PORT);
+      }
     });
 
     // Keep-alive must exceed the proxy's idle timeout, otherwise the server can

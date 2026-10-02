@@ -1,30 +1,37 @@
 name: Keep backend warm
 
 # Render's free tier spins the service down after ~15 minutes with no
-# requests, so the next real visitor eats a 30–60s cold start while it wakes
-# back up — that's the "app is taking load sometimes" slowness. This pings
-# the health endpoint every 10 minutes, well inside that window, so Render
-# never sees the service go idle in the first place.
+# requests. GitHub's cron scheduler is often delayed by up to 10–15 min under
+# load, so a 10-minute interval can easily produce a 20+ minute gap — past
+# Render's idle threshold. Running at *:00, *:05, *:14, *:19, ... (every 5
+# minutes) gives two independent pings inside any 15-minute window, so even
+# if GitHub delays one by 10 minutes the other still lands in time.
 #
-# Requires no secrets and no extra hosting — GitHub runs this on its own
-# schedule for free as long as the workflow file lives on the repo's default
-# branch. GitHub may delay a `schedule` trigger by a few minutes under load;
-# that's fine here, there's no tight timing requirement.
+# Each step also retries up to 3 times with a 10s backoff so a transient
+# network hiccup doesn't count as a missed ping.
 on:
   schedule:
-    - cron: '*/10 * * * *'
-  workflow_dispatch: {} # lets you trigger it manually from the Actions tab to test
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}   # manual trigger from the Actions tab for testing
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Ping health endpoint
+      - name: Ping health endpoint (with retry)
         run: |
           URL="https://splitapp-backend-p2hz.onrender.com/api/health"
           echo "Pinging $URL"
-          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL")
-          echo "Response status: $status"
-          if [ "$status" != "200" ]; then
-            echo "::warning::Health check returned $status instead of 200"
-          fi
+          for attempt in 1 2 3; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "$URL")
+            echo "Attempt $attempt — status: $status"
+            if [ "$status" = "200" ]; then
+              echo "Backend is warm."
+              exit 0
+            fi
+            echo "Non-200 response, retrying in 10s..."
+            sleep 10
+          done
+          echo "::warning::Backend health check did not return 200 after 3 attempts (last status: $status)"
+          exit 0   # don't fail the workflow — a warning is enough

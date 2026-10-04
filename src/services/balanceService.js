@@ -167,26 +167,27 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     Settlement.find({ group: groupId }).select(SETTLEMENT_BALANCE_FIELDS).lean(),
   ]);
 
-  // Net balance per member within group.
-  // Positive = this member is owed money (paid more than their share).
-  // Negative = this member owes money (their share exceeds what they paid).
-  const netMap = {};
-  memberIdStrings.forEach((id) => { netMap[id] = 0; });
+  // Net balance per person within group, accumulated in integer cents.
+  // Positive = owed money (paid more than their share).
+  // Negative = owes money (their share exceeds what they paid).
+  //
+  // Everyone who appears in the group's expenses or settlements is counted —
+  // not only current members. Dropping a removed member's entries used to make
+  // the group stop summing to zero, so the remaining "who owes whom" was wrong.
+  const centsMap = {};
+  memberIdStrings.forEach((id) => { centsMap[id] = 0; });
+  const add = (id, cents) => {
+    const key = id.toString();
+    centsMap[key] = (centsMap[key] || 0) + cents;
+  };
+  const cents = (n) => Math.round(n * 100);
 
   for (const expense of expenses) {
-    const paidByStr = expense.paidBy.toString();
-
-    // Payer gets credit for the full amount
-    if (netMap[paidByStr] !== undefined) {
-      netMap[paidByStr] += expense.amount;
-    }
-
-    // Each participant (including payer) is debited their share
+    // Payer gets credit for the full amount; each participant (including the
+    // payer) is debited their share.
+    add(expense.paidBy, cents(expense.amount));
     for (const split of expense.splits) {
-      const splitUserStr = split.user.toString();
-      if (netMap[splitUserStr] !== undefined) {
-        netMap[splitUserStr] -= split.amount;
-      }
+      add(split.user, -cents(split.amount));
     }
   }
 
@@ -194,15 +195,14 @@ const calculateGroupBalances = async (groupId, memberIds) => {
   // `from` is the payer: their balance improves (they discharged cash).
   // `to` is the receiver: their "credit" shrinks (they received cash back).
   for (const settlement of settlements) {
-    const fromStr = settlement.from.toString();
-    const toStr = settlement.to.toString();
-    if (netMap[fromStr] !== undefined) netMap[fromStr] += settlement.amount;
-    if (netMap[toStr] !== undefined) netMap[toStr] -= settlement.amount;
+    add(settlement.from, cents(settlement.amount));
+    add(settlement.to, -cents(settlement.amount));
   }
 
-  // Round to 2 dp
-  for (const key of Object.keys(netMap)) {
-    netMap[key] = round2(netMap[key]);
+  const netMap = {};
+  for (const [key, value] of Object.entries(centsMap)) {
+    // Former members only matter while they still have a balance.
+    if (value !== 0 || memberIdStrings.includes(key)) netMap[key] = value / 100;
   }
 
   // Pass the net map directly to simplifyDebts. The previous code built

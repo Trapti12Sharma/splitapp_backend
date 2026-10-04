@@ -31,21 +31,24 @@ const simplifyDebts = (input) => {
     balanceMap = { ...input };
   }
 
-  // Separate into creditors (positive) and debtors (negative)
-  const creditors = []; // { id, amount }
-  const debtors = [];   // { id, amount }
+  // Separate into creditors (positive) and debtors (negative). Amounts are held
+  // in integer cents so repeated subtraction can't leave float crumbs behind
+  // (which used to surface as phantom ₹0.01 debts or an unmatched creditor).
+  const creditors = []; // { id, cents }
+  const debtors = [];   // { id, cents }
 
   for (const [id, balance] of Object.entries(balanceMap)) {
-    if (balance > 0.001) {
-      creditors.push({ id, amount: balance });
-    } else if (balance < -0.001) {
-      debtors.push({ id, amount: Math.abs(balance) });
+    const cents = Math.round(balance * 100);
+    if (cents > 0) {
+      creditors.push({ id, cents });
+    } else if (cents < 0) {
+      debtors.push({ id, cents: -cents });
     }
   }
 
   // Sort descending for greedy matching
-  creditors.sort((a, b) => b.amount - a.amount);
-  debtors.sort((a, b) => b.amount - a.amount);
+  creditors.sort((a, b) => b.cents - a.cents);
+  debtors.sort((a, b) => b.cents - a.cents);
 
   const simplified = [];
 
@@ -56,22 +59,14 @@ const simplifyDebts = (input) => {
     const debtor = debtors[i];
     const creditor = creditors[j];
 
-    const settleAmount = Math.min(debtor.amount, creditor.amount);
-    const rounded = Math.round(settleAmount * 100) / 100;
+    const settle = Math.min(debtor.cents, creditor.cents);
+    simplified.push({ from: debtor.id, to: creditor.id, amount: settle / 100 });
 
-    if (rounded > 0) {
-      simplified.push({
-        from: debtor.id,
-        to: creditor.id,
-        amount: rounded,
-      });
-    }
+    debtor.cents -= settle;
+    creditor.cents -= settle;
 
-    debtor.amount -= settleAmount;
-    creditor.amount -= settleAmount;
-
-    if (debtor.amount < 0.001) i++;
-    if (creditor.amount < 0.001) j++;
+    if (debtor.cents === 0) i++;
+    if (creditor.cents === 0) j++;
   }
 
   return simplified;

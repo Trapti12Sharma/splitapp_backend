@@ -1,5 +1,6 @@
 const Settlement = require('../models/Settlement');
 const User = require('../models/User');
+const Group = require('../models/Group');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { createNotification } = require('../services/notificationService');
 const { invalidateBalances, invalidateGroupBalances } = require('../services/balanceService');
@@ -65,6 +66,14 @@ const createSettlement = async (req, res, next) => {
 
     const payer = await User.findById(from).select('_id').lean();
     if (!payer) return errorResponse(res, 'Payer not found', 404);
+
+    // A group-scoped settlement changes that group's balances, so only a
+    // member of the group may record one against it.
+    if (group) {
+      const groupDoc = await Group.findById(group).select('members');
+      if (!groupDoc) return errorResponse(res, 'Group not found', 404);
+      if (!groupDoc.isMember(req.user._id)) return errorResponse(res, 'Not a member of this group', 403);
+    }
 
     const settlement = await Settlement.create({
       from,

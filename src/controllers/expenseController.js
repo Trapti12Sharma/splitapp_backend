@@ -15,6 +15,14 @@ const affectedUserIds = (expense) => {
   return ids.filter(Boolean);
 };
 
+// A group expense may only involve group members. A split user outside the
+// group would be invisible to the group's balances and break its totals.
+const findNonMember = (group, paidBy, splits) => {
+  if (!group.isMember(paidBy)) return 'PaidBy must be a group member';
+  if (splits.some((s) => !group.isMember(s.user))) return 'Everyone in the split must be a group member';
+  return null;
+};
+
 // Helper to build splits from request body
 const buildSplits = (splitType, amount, splitsData) => {
   if (splitType === 'equal') {
@@ -96,11 +104,11 @@ const createExpense = async (req, res, next) => {
     const groupId = req.params.id || (req.body.group && req.body.group.trim() !== '' ? req.body.group : null);
 
     // If group expense, verify membership
+    let group = null;
     if (groupId) {
-      const group = await Group.findById(groupId).select('members');
+      group = await Group.findById(groupId).select('members');
       if (!group) return errorResponse(res, 'Group not found', 404);
       if (!group.isMember(req.user._id)) return errorResponse(res, 'Not a member of this group', 403);
-      if (!group.isMember(paidBy)) return errorResponse(res, 'PaidBy must be a group member', 400);
     }
 
     // Parse splits data
@@ -108,6 +116,7 @@ const createExpense = async (req, res, next) => {
     if (typeof splitsData === 'string') {
       try { parsedSplits = JSON.parse(splitsData); } catch { parsedSplits = []; }
     }
+    if (!Array.isArray(parsedSplits)) parsedSplits = [];
 
     // Calculate splits
     let computedSplits;
@@ -115,6 +124,11 @@ const createExpense = async (req, res, next) => {
       computedSplits = buildSplits(splitType, parseFloat(amount), parsedSplits);
     } catch (err) {
       return errorResponse(res, err.message, 400);
+    }
+
+    if (group) {
+      const membershipError = findNonMember(group, paidBy, computedSplits);
+      if (membershipError) return errorResponse(res, membershipError, 400);
     }
 
     let receipt = null;
@@ -211,8 +225,9 @@ const updateExpense = async (req, res, next) => {
     // Authorization
     const isCreator = (expense.createdBy?._id || expense.createdBy)?.toString() === req.user._id.toString();
     let isAdmin = false;
+    let group = null;
     if (expense.group) {
-      const group = await Group.findById(expense.group._id || expense.group).select('members');
+      group = await Group.findById(expense.group._id || expense.group).select('members');
       isAdmin = group && group.isAdmin(req.user._id);
     }
     if (!isCreator && !isAdmin) return errorResponse(res, 'Not authorized to edit this expense', 403);
@@ -255,7 +270,7 @@ const updateExpense = async (req, res, next) => {
           userId: (s.user?._id || s.user)?.toString(),
           amount: s.amount || 0,
           percentage: s.percentage || 0,
-          shares: s.shares || 1,
+          shares: s.shares ?? 1,
         }));
       }
 
@@ -264,6 +279,13 @@ const updateExpense = async (req, res, next) => {
       } catch (err) {
         return errorResponse(res, err.message, 400);
       }
+    }
+
+    // Only when the people involved change — an edit to the description of an
+    // old expense shouldn't be blocked by a member who has since left.
+    if (group && (paidBy || parsedSplits)) {
+      const membershipError = findNonMember(group, expense.paidBy, expense.splits);
+      if (membershipError) return errorResponse(res, membershipError, 400);
     }
 
     expense.amount = newAmount;

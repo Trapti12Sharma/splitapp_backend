@@ -187,16 +187,38 @@ const addMembers = async (req, res, next) => {
 
 // @desc    Remove member from group
 // @route   DELETE /api/groups/:id/members/:userId
-// @access  Private (admin only)
+// @access  Private (members only — any member can remove others, but only an
+//          admin can remove another admin, and nobody with an open balance)
 const removeMember = async (req, res, next) => {
   try {
     const group = await Group.findById(req.params.id);
     if (!group) return errorResponse(res, 'Group not found', 404);
-    if (!group.isAdmin(req.user._id)) return errorResponse(res, 'Only admins can remove members', 403);
+    if (!group.isMember(req.user._id)) return errorResponse(res, 'You must be a group member to remove others', 403);
 
     const targetUserId = req.params.userId;
     if (targetUserId === req.user._id.toString()) {
-      return errorResponse(res, 'Admin cannot remove themselves', 400);
+      return errorResponse(res, 'You cannot remove yourself', 400);
+    }
+    if (!group.isMember(targetUserId)) {
+      return errorResponse(res, 'User is not a member of this group', 404);
+    }
+    // Otherwise a regular member could strip the group of its only admin, and
+    // nobody would be left who can delete it.
+    if (group.isAdmin(targetUserId) && !group.isAdmin(req.user._id)) {
+      return errorResponse(res, 'Only an admin can remove another admin', 403);
+    }
+
+    // Removing someone who still owes or is owed money would hide that debt
+    // from the group's balances, so they have to settle up first.
+    const memberIds = group.members.map((m) => m.user);
+    const { memberBalances } = await calculateGroupBalances(group._id, memberIds);
+    const outstanding = memberBalances[targetUserId] || 0;
+    if (Math.abs(outstanding) >= 0.01) {
+      return errorResponse(
+        res,
+        'This member still has an unsettled balance in the group. Settle up before removing them.',
+        400
+      );
     }
 
     group.members = group.members.filter((m) => {
@@ -231,6 +253,23 @@ const getGroupBalances = async (req, res, next) => {
       role: m.role,
       netBalance: memberBalances[m.user._id.toString()] || 0,
     }));
+
+    // People removed from the group who still carry a balance (from before the
+    // settle-first rule existed) stay visible so the totals add up.
+    const memberIdSet = new Set(memberIds.map((id) => id.toString()));
+    const formerIds = Object.keys(memberBalances).filter((id) => !memberIdSet.has(id));
+    if (formerIds.length) {
+      const formerUsers = await User.find({ _id: { $in: formerIds } })
+        .select('name username profileImage')
+        .lean();
+      for (const user of formerUsers) {
+        balances.push({
+          user,
+          role: 'former',
+          netBalance: memberBalances[user._id.toString()],
+        });
+      }
+    }
 
     return successResponse(res, 'Group balances fetched', { balances, whoOwesWhom });
   } catch (error) {

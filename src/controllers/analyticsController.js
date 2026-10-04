@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
 const Group = require('../models/Group');
+const Settlement = require('../models/Settlement');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { getUserBalanceSummary } = require('../services/balanceService');
 
@@ -215,18 +216,32 @@ const getGroupStats = async (req, res, next) => {
           paidByUser: [
             { $group: { _id: '$paidBy', totalPaid: { $sum: '$amount' }, expenseCount: { $sum: 1 } } },
           ],
+          // Each person's full share of the group's spending, the payer's own
+          // share included. totalPaid counts the whole bill for the payer, so
+          // net = paid - share. (Excluding the payer's own split here used to
+          // overstate the payer: paying ₹100 split with one friend showed +₹100
+          // instead of +₹50.)
           owedByUser: [
             { $unwind: '$splits' },
-            // Exclude the payer's own split — the payer's "share" is part of what
-            // they paid out, not a debt they owe to themselves. Without this filter,
-            // a member who paid an expense gets their own share counted in totalOwed,
-            // making netBalance (totalPaid - totalOwed) incorrectly close to zero.
-            { $match: { $expr: { $ne: ['$splits.user', '$paidBy'] } } },
             { $group: { _id: '$splits.user', totalOwed: { $sum: '$splits.amount' } } },
           ],
         },
       },
     ]);
+
+    // Group settlements move the net balance too; without them Stats disagreed
+    // with the Balances tab as soon as anyone settled up.
+    const settlementTotals = await Settlement.aggregate([
+      { $match: { group: groupId } },
+      {
+        $facet: {
+          sent: [{ $group: { _id: '$from', total: { $sum: '$amount' } } }],
+          received: [{ $group: { _id: '$to', total: { $sum: '$amount' } } }],
+        },
+      },
+    ]);
+    const sentMap = new Map((settlementTotals[0]?.sent || []).map((r) => [String(r._id), r.total]));
+    const receivedMap = new Map((settlementTotals[0]?.received || []).map((r) => [String(r._id), r.total]));
 
     const totals = facets?.totals?.[0];
     const categoryBreakdown = facets?.categories || [];
@@ -240,12 +255,13 @@ const getGroupStats = async (req, res, next) => {
         const uid = m.user._id.toString();
         const totalPaid = paidMap.get(uid)?.totalPaid || 0;
         const totalOwed = owedMap.get(uid)?.totalOwed || 0;
+        const settled = (sentMap.get(uid) || 0) - (receivedMap.get(uid) || 0);
         return {
           user: m.user,
           role: m.role,
           totalPaid: Math.round(totalPaid * 100) / 100,
           totalOwed: Math.round(totalOwed * 100) / 100,
-          netBalance: Math.round((totalPaid - totalOwed) * 100) / 100,
+          netBalance: Math.round((totalPaid - totalOwed + settled) * 100) / 100,
           expenseCount: paidMap.get(uid)?.expenseCount || 0,
         };
       });

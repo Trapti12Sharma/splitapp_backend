@@ -1,6 +1,7 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const http = require('http');
+const https = require('https');
 const app = require('./app');
 const connectDB = require('./config/database');
 
@@ -9,22 +10,34 @@ const PORT = process.env.PORT || 5000;
 /**
  * Self-ping keeps Render's free tier from spinning down.
  *
- * Render idles a service after ~15 minutes with no inbound traffic.
- * GitHub Actions `schedule` cron is unreliable on free accounts — jobs
- * can be delayed 10–30 min, which means a 10-min cron still misses the
- * window. A setInterval inside the server itself fires exactly on time
- * because it runs in the same process — no external scheduler involved.
+ * Render idles a service after 15 minutes with no *inbound* traffic — traffic
+ * that arrives through its public proxy. The ping therefore has to go out to
+ * the service's public URL and come back in. Pinging `localhost` (as this used
+ * to) never leaves the container, so Render never saw it and the service
+ * still went to sleep.
  *
- * Interval: 10 min (600 000 ms) — comfortably inside the 15-min idle window
- * even if Node's event loop is slightly busy. Uses the built-in `http` module
- * so there are no extra dependencies.
+ * GitHub Actions `schedule` is no substitute: its runs for this repo arrived
+ * hours apart, not every 5 minutes. A setInterval in the process fires on time.
+ *
+ * Limitation: once the service is asleep this code isn't running, so it can't
+ * wake itself. An external monitor (cron-job.org / UptimeRobot) hitting
+ * /api/health covers that case — e.g. after Render restarts or redeploys.
+ *
+ * Render sets RENDER_EXTERNAL_URL automatically (https://<name>.onrender.com).
  */
-const startSelfPing = (port) => {
-  const INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
-  const pingUrl = `http://localhost:${port}/api/health`;
+const startSelfPing = () => {
+  const baseUrl = process.env.RENDER_EXTERNAL_URL || process.env.SELF_PING_URL;
+  if (!baseUrl) {
+    console.warn('[keep-alive] RENDER_EXTERNAL_URL not set — self-ping disabled');
+    return;
+  }
+
+  const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes: three chances per 15-min idle window
+  const pingUrl = `${baseUrl.replace(/\/$/, '')}/api/health`;
+  const client = pingUrl.startsWith('https:') ? https : http;
 
   const ping = () => {
-    const req = http.get(pingUrl, (res) => {
+    const req = client.get(pingUrl, (res) => {
       // Drain the response so the socket is released cleanly.
       res.resume();
       console.log(`[keep-alive] self-ping → ${res.statusCode}`);
@@ -40,7 +53,7 @@ const startSelfPing = (port) => {
   const timer = setInterval(ping, INTERVAL_MS);
   timer.unref();
 
-  console.log(`[keep-alive] self-ping scheduled every ${INTERVAL_MS / 60000} min`);
+  console.log(`[keep-alive] self-ping ${pingUrl} every ${INTERVAL_MS / 60000} min`);
 };
 
 const startServer = async () => {
@@ -55,7 +68,7 @@ const startServer = async () => {
       // Start self-ping only in production (Render). In dev the server is
       // never idle long enough to need it, and the noise clutters the console.
       if (process.env.NODE_ENV === 'production') {
-        startSelfPing(PORT);
+        startSelfPing();
       }
     });
 

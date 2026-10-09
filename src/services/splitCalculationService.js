@@ -131,4 +131,8 @@ const calculateSplits = (splitType, amount, participants, splitData = []) => {
   }
 };
 
-module.exports = { calculateSplits, allocateCents, toCents, fromCents };
+// module.exports = { calculateSplits, allocateCents, toCents, fromCents };
+
+module.exports = {
+  calculateSplits,
+};

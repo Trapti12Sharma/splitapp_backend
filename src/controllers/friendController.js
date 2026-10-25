@@ -1,9 +1,15 @@
+const mongoose = require('mongoose');
 const Friendship = require('../models/Friendship');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const { successResponse, errorResponse } = require('../utils/apiResponse');
 const { createNotification } = require('../services/notificationService');
 const { sendFriendRequestEmail } = require('../services/emailService');
-const { calculateUserBalances } = require('../services/balanceService');
+const { calculateUserBalances, getFriendBalance } = require('../services/balanceService');
+
+// One payment reminder per person, per debtor, per day — enough to nudge
+// without letting anyone spam a friend's phone.
+const REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 // @desc    Get friends list with balances
 // @route   GET /api/friends
@@ -194,4 +200,58 @@ const removeFriend = async (req, res, next) => {
   }
 };
 
-module.exports = { getFriends, getFriendRequests, sendFriendRequest, acceptFriendRequest, rejectFriendRequest, removeFriend };
+// @desc    Remind someone who owes you money to pay you back
+// @route   POST /api/friends/:id/remind
+// @access  Private
+const sendPaymentReminder = async (req, res, next) => {
+  try {
+    const debtorId = req.params.id;
+    if (!mongoose.isValidObjectId(debtorId)) return errorResponse(res, 'User not found', 404);
+    if (debtorId === req.user._id.toString()) {
+      return errorResponse(res, 'Cannot send a reminder to yourself', 400);
+    }
+
+    const [debtor, balance, recentReminder] = await Promise.all([
+      User.findById(debtorId).select('name').lean(),
+      getFriendBalance(req.user._id, debtorId),
+      Notification.exists({
+        user: debtorId,
+        relatedUser: req.user._id,
+        type: 'payment_reminder',
+        createdAt: { $gte: new Date(Date.now() - REMINDER_COOLDOWN_MS) },
+      }),
+    ]);
+
+    if (!debtor) return errorResponse(res, 'User not found', 404);
+    if (balance.theyOwe <= 0) {
+      return errorResponse(res, `${debtor.name} doesn't owe you anything`, 400);
+    }
+    if (recentReminder) {
+      return errorResponse(res, `You already reminded ${debtor.name} today`, 429);
+    }
+
+    const amount = balance.theyOwe.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+
+    await createNotification({
+      userId: debtorId,
+      type: 'payment_reminder',
+      title: 'Payment Reminder',
+      message: `You have to pay ${req.user.name} ₹${amount}`,
+      relatedUser: req.user._id,
+    });
+
+    return successResponse(res, `Reminder sent to ${debtor.name}`);
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  getFriends,
+  getFriendRequests,
+  sendFriendRequest,
+  acceptFriendRequest,
+  rejectFriendRequest,
+  removeFriend,
+  sendPaymentReminder,
+};

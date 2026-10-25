@@ -1,4 +1,5 @@
 const Notification = require('../models/Notification');
+const { sendPushForNotifications } = require('./pushService');
 
 const toDoc = ({ userId, type, title, message, relatedExpense, relatedGroup, relatedUser }) => ({
   user: userId,
@@ -16,7 +17,11 @@ const createNotification = async (payload) => {
   } catch (error) {
     console.error('Failed to create notification:', error.message);
     // Non-blocking — notification failure should not break main flow
+    return;
   }
+  // Fire-and-forget: the push round-trip to the browser vendor shouldn't hold
+  // up the API response. sendPushForNotifications never throws.
+  sendPushForNotifications([payload]);
 };
 
 /**
@@ -35,6 +40,7 @@ const createNotifications = async (payloads) => {
     console.error('Failed to create notifications:', error.message);
     // Non-blocking — notification failure should not break main flow
   }
+  sendPushForNotifications(payloads);
 };
 
 module.exports = { createNotification, createNotifications };

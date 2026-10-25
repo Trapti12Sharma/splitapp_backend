@@ -17,6 +17,7 @@ const notificationSchema = new mongoose.Schema(
         'expense_edited',
         'expense_deleted',
         'settlement_received',
+        'payment_reminder',
       ],
       required: true,
     },

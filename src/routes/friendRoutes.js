@@ -7,6 +7,7 @@ const {
   acceptFriendRequest,
   rejectFriendRequest,
   removeFriend,
+  sendPaymentReminder,
 } = require('../controllers/friendController');
 const { getFriendBalanceController } = require('../controllers/balanceController');
 const { protect } = require('../middleware/authMiddleware');
@@ -18,5 +19,6 @@ router.put('/:id/accept', protect, acceptFriendRequest);
 router.put('/:id/reject', protect, rejectFriendRequest);
 router.delete('/:id', protect, removeFriend);
 router.get('/:id/balance', protect, getFriendBalanceController);
+router.post('/:id/remind', protect, sendPaymentReminder);
 
 module.exports = router;

@@ -122,6 +122,7 @@ app.use('/api/expenses', require('./routes/expenseRoutes'));
 app.use('/api/balances', require('./routes/balanceRoutes'));
 app.use('/api/settlements', require('./routes/settlementRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
+app.use('/api/push', require('./routes/pushRoutes'));
 app.use('/api/analytics', require('./routes/analyticsRoutes'));
 
 // 404 handler

@@ -36,4 +36,16 @@ const uploadLimiter = rateLimit({
   message: { success: false, message: 'Too many uploads, please try again later' },
 });
 
-module.exports = { generalLimiter, authLimiter, uploadLimiter };
+// Spreadsheet exports read a group's entire history and build a file in memory,
+// so they cost far more than a normal read. Mounted after `protect`, so it is
+// keyed per user rather than per (possibly shared) IP.
+const exportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `export:${req.user._id.toString()}`,
+  message: { success: false, message: 'Too many downloads, please try again in a few minutes' },
+});
+
+module.exports = { generalLimiter, authLimiter, uploadLimiter, exportLimiter };

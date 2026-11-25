@@ -69,6 +69,8 @@ app.use(
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    // Lets the frontend read the server-chosen filename on file downloads.
+    exposedHeaders: ['Content-Disposition'],
     maxAge: 86400, // cache the preflight for a day instead of re-sending it
   })
 );

@@ -167,6 +167,30 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     Settlement.find({ group: groupId }).select(SETTLEMENT_BALANCE_FIELDS).lean(),
   ]);
 
+  const netMap = computeGroupNetMap(expenses, settlements, memberIdStrings);
+
+  // Pass the net map directly to simplifyDebts. The previous code built
+  // a cartesian product of debtor×creditor pairs and fed that into
+  // simplifyDebts, which then recomputed net balances from those pairs — the
+  // double-computation produced wrong amounts and wrong creditor assignments.
+  // simplifyDebts now accepts a pre-computed net map directly.
+  const simplified = simplifyDebts(netMap);
+
+  const result = { memberBalances: netMap, whoOwesWhom: simplified };
+  balanceCache.set(cacheKey, result);
+
+  return { memberBalances: { ...netMap }, whoOwesWhom: simplified };
+};
+
+/**
+ * Pure net-balance maths for one group, shared by the balances endpoint and the
+ * spreadsheet export so the two can never disagree.
+ * Works with populated or unpopulated `paidBy` / `splits.user` / `from` / `to`.
+ * Returns { userId: netAmount } — positive = is owed money, negative = owes.
+ */
+const computeGroupNetMap = (expenses, settlements, memberIdStrings = []) => {
+  const idOf = (ref) => (ref && ref._id ? ref._id : ref);
+
   // Net balance per person within group, accumulated in integer cents.
   // Positive = owed money (paid more than their share).
   // Negative = owes money (their share exceeds what they paid).
@@ -176,7 +200,10 @@ const calculateGroupBalances = async (groupId, memberIds) => {
   // the group stop summing to zero, so the remaining "who owes whom" was wrong.
   const centsMap = {};
   memberIdStrings.forEach((id) => { centsMap[id] = 0; });
-  const add = (id, cents) => {
+  const add = (ref, cents) => {
+    const id = idOf(ref);
+    // A split/payer whose user document was deleted populates to null.
+    if (id == null) return;
     const key = id.toString();
     centsMap[key] = (centsMap[key] || 0) + cents;
   };
@@ -205,17 +232,7 @@ const calculateGroupBalances = async (groupId, memberIds) => {
     if (value !== 0 || memberIdStrings.includes(key)) netMap[key] = value / 100;
   }
 
-  // Pass the net map directly to simplifyDebts. The previous code built
-  // a cartesian product of debtor×creditor pairs and fed that into
-  // simplifyDebts, which then recomputed net balances from those pairs — the
-  // double-computation produced wrong amounts and wrong creditor assignments.
-  // simplifyDebts now accepts a pre-computed net map directly.
-  const simplified = simplifyDebts(netMap);
-
-  const result = { memberBalances: netMap, whoOwesWhom: simplified };
-  balanceCache.set(cacheKey, result);
-
-  return { memberBalances: { ...netMap }, whoOwesWhom: simplified };
+  return netMap;
 };
 
 /**
@@ -273,6 +290,7 @@ module.exports = {
   getUserBalanceSummary,
   summariseBalanceMap,
   calculateGroupBalances,
+  computeGroupNetMap,
   getFriendBalance,
   invalidateBalances,
   invalidateGroupBalances,

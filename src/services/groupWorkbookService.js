@@ -111,7 +111,12 @@ const makeDateHelpers = (tzOffsetMinutes) => {
     const h = d.getUTCHours();
     return `${base}, ${pad(h % 12 || 12)}:${pad(d.getUTCMinutes())} ${h < 12 ? 'AM' : 'PM'}`;
   };
-  return { toLocal, toLocalTimestamp, label };
+  // Calendar-only expense dates show just the day; real timestamps show the time too.
+  const cellFmt = (d) => {
+    const date = d instanceof Date ? d : d ? new Date(d) : null;
+    return date && !Number.isNaN(date.getTime()) && !isDateOnly(date) ? 'dd mmm yyyy, hh:mm AM/PM' : 'dd mmm yyyy';
+  };
+  return { toLocal, toLocalTimestamp, label, cellFmt };
 };
 
 const makeMoneyHelpers = (currency) => {
@@ -425,7 +430,7 @@ const buildExpensesSheet = (wb, ctx) => {
   const { report, money, dates, nameOf } = ctx;
   const ws = wb.addWorksheet('Expenses', { properties: { tabColor: { argb: argb(CATEGORY_COLORS.Food) } } });
   const headers = ['#', 'Date', 'Description', 'Category', 'Amount', 'Currency', 'Paid by', 'Split type', 'People', 'How it was split', 'Notes', 'Added by'];
-  setWidths(ws, [6, 14, 32, 16, 15, 10, 20, 15, 9, 55, 30, 18]);
+  setWidths(ws, [6, 21, 32, 16, 15, 10, 20, 15, 9, 55, 30, 18]);
 
   let row = addBanner(ws, ctx, {
     title: 'All Expenses',
@@ -463,7 +468,7 @@ const buildExpensesSheet = (wb, ctx) => {
       clean(e.createdByName),
     ];
     paintCategory(r.getCell(4), e.category);
-    r.getCell(2).numFmt = 'dd mmm yyyy';
+    r.getCell(2).numFmt = dates.cellFmt(e.date);
     r.getCell(5).numFmt = money.numFmt;
     styleBodyRow(ws, row, headers.length, i);
     r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
@@ -502,7 +507,7 @@ const buildSplitSheet = (wb, ctx) => {
     ...fixed,
     ...people.map((p) => `${clean(p.name)}${p.username ? `\n@${clean(p.username)}` : ''}${p.role === 'former' ? '\n(former)' : ''}`),
   ];
-  setWidths(ws, [6, 14, 30, 16, 15, 20, ...people.map(() => 17)]);
+  setWidths(ws, [6, 21, 30, 16, 15, 20, ...people.map(() => 17)]);
 
   let row = addBanner(ws, ctx, {
     title: 'Who Owes What — Per Expense',
@@ -521,7 +526,7 @@ const buildSplitSheet = (wb, ctx) => {
     const r = ws.getRow(row);
     r.values = [i + 1, dates.toLocal(e.date), clean(e.description), null, e.amount, nameOf(e.paidById)];
     paintCategory(r.getCell(4), e.category);
-    r.getCell(2).numFmt = 'dd mmm yyyy';
+    r.getCell(2).numFmt = dates.cellFmt(e.date);
     r.getCell(5).numFmt = money.numFmt;
     styleBodyRow(ws, row, headers.length, i);
     r.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };

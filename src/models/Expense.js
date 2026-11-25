@@ -105,7 +105,9 @@ const expenseSchema = new mongoose.Schema(
 );
 
 // Indexes for efficient querying at scale
-expenseSchema.index({ group: 1, date: -1 });
+// Group expense list sorts newest first by date, then by when it was added
+// (older expenses only stored a calendar day, so many share the same `date`).
+expenseSchema.index({ group: 1, date: -1, createdAt: -1 });
 expenseSchema.index({ 'splits.user': 1, date: -1 });
 expenseSchema.index({ paidBy: 1, date: -1 });
 expenseSchema.index({ createdBy: 1, date: -1 });

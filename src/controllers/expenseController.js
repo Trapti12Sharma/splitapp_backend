@@ -74,7 +74,8 @@ const getExpenses = async (req, res, next) => {
         .populate('splits.user', 'name username profileImage')
         .populate('group', 'name')
         .populate('createdBy', 'name username')
-        .sort({ [sortField]: sortOrder })
+        // Tie-break so equal dates/amounts keep a stable order across pages.
+        .sort({ [sortField]: sortOrder, createdAt: sortOrder, _id: sortOrder })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .lean(), // lean() for ~3x faster reads
@@ -395,7 +396,10 @@ const getGroupExpenses = async (req, res, next) => {
         .populate('paidBy', 'name username profileImage')
         .populate('splits.user', 'name username profileImage')
         .populate('createdBy', 'name username')
-        .sort({ date: -1 })
+        // Newest first. `date` alone ties for every expense on the same day
+        // (older ones only stored a calendar day), which left their order to
+        // chance — break ties by when the expense was added, then by _id.
+        .sort({ date: -1, createdAt: -1, _id: -1 })
         .skip((pageNum - 1) * limitNum)
         .limit(limitNum)
         .lean(),
